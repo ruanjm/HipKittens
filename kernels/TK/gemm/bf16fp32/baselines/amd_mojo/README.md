@@ -30,7 +30,7 @@ pixi add modular
 pixi shell
 ```
 
-Run: 
+Run benchmark: 
 ```
 mojo test_kernel.mojo
 ```

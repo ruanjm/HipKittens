@@ -21,11 +21,12 @@ from buffer.dimlist import DimList
 from gpu.host import DeviceContext
 from internal_utils import DeviceNDBuffer, HostNDBuffer
 from internal_utils._utils import ValOrDim, dynamic, static
-from matmul_gpu import _matmul_gpu
+from matmul_gpu import _matmul_gpu, matmul_kernel_naive
 
 from utils import IndexList
 
 from buffer import NDBuffer
+from math import align_down, ceildiv
 
 alias epilogue_func_type = fn[dtype: DType, width: Int, *, alignment: Int = 1] (
     IndexList[2], IndexList[2], SIMD[dtype, width]
@@ -144,36 +145,38 @@ fn test[
     ctx.enqueue_copy(c_host.tensor.data, c_device.buffer)
 
     # print("Starting reference kernel... transpose_b = ", transpose_b)
-    # if (transpose_b == False):
-    #     c_device_ref.tensor.zero()
-    #     for i in range(M):
-    #         for p in range(K):
-    #             for j in range(N):
-    #                 var a_val = a_device.tensor[i, p].cast[out_type]()
-    #                 var b_val = b_device.tensor[p, j].cast[out_type]()
-    #                 c_device_ref.tensor[i, j] += a_val * b_val
-    # else:
-    #     c_device_ref.tensor.zero()
-    #     for i in range(M):
-    #         for p in range(K):
-    #             for j in range(N):
-    #                 var a_val = a_device.tensor[i, p].cast[out_type]()
-    #                 var b_val = b_device.tensor[j, p].cast[out_type]()
-    #                 c_device_ref.tensor[i, j] += a_val * b_val
-    # print("Finished.")
+    alias BLOCK_DIM = 16 
+    ctx.enqueue_function[
+        matmul_kernel_naive[
+            out_type,
+            in_type,
+            in_type,
+            BLOCK_DIM,
+            transpose_b,
+            s_type = DType.float32,
+    ]](
+        c_device_ref.tensor.data,
+        a_device.tensor.data,
+        b_device.tensor.data,
+        M,
+        N,
+        K,
+        grid_dim=(ceildiv(M, BLOCK_DIM), ceildiv(N, BLOCK_DIM)),
+        block_dim=(BLOCK_DIM, BLOCK_DIM),
+    )
 
     ctx.enqueue_copy(c_host_ref.tensor.data, c_device_ref.buffer)
 
     ctx.synchronize()
-    # var errors = 0
-    # for i in range(M * N):
-    #     # print(i // N, i % N, c_host.tensor.data[i], c_host_ref.tensor.data[i])
-    #     if c_host.tensor.data[i] != c_host_ref.tensor.data[i]:
-    #         if (i < 10):
-    #             print(c_host.tensor.data[i], c_host_ref.tensor.data[i])
-    #         errors += 1
+    var errors = 0
+    for i in range(M * N):
+        # print(i // N, i % N, c_host.tensor.data[i], c_host_ref.tensor.data[i])
+        if c_host.tensor.data[i] != c_host_ref.tensor.data[i]:
+            # if (i < 10):
+            #     print(c_host.tensor.data[i], c_host_ref.tensor.data[i])
+            errors += 1
 
-    # print("errors", errors)
+    print("errors", errors)
 
     @parameter
     fn bench_func(mut m: Bencher):
@@ -207,7 +210,7 @@ fn test[
 def main():
     import os
     from pathlib import Path
-    
+
     var bench = Bench(
         BenchConfig(
             out_file=Path("out.txt"),
@@ -220,8 +223,32 @@ def main():
         test[
             in_type = DType.bfloat16,
             out_type = DType.bfloat16,
-            transpose_b=False,
-        ](bench, ctx, dynamic(8192), static[8192](), static[8192]())
+            transpose_b=True,
+        ](bench, ctx, static[1024](), static[1024](), static[1024]())
+
+        test[
+            in_type = DType.bfloat16,
+            out_type = DType.bfloat16,
+            transpose_b=True,
+        ](bench, ctx, static[2048](), static[2048](), static[2048]())
+
+        test[
+            in_type = DType.bfloat16,
+            out_type = DType.bfloat16,
+            transpose_b=True,
+        ](bench, ctx, static[4096](), static[4096](), static[4096]())
+
+        test[
+            in_type = DType.bfloat16,
+            out_type = DType.bfloat16,
+            transpose_b=True,
+        ](bench, ctx, static[8192](), static[8192](), static[8192]())
+
+        test[
+            in_type = DType.bfloat16,
+            out_type = DType.bfloat16,
+            transpose_b=True,
+        ](bench, ctx, static[16384](), static[16384](), static[16384]())
 
     bench.dump_report()
 

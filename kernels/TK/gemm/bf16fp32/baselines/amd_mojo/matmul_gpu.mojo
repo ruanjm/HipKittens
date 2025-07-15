@@ -40,7 +40,6 @@ from gpu import (
 from gpu.grid_controls import PDLLevel
 from gpu.host import DeviceContext, FuncAttribute
 from gpu.host import get_gpu_target
-from gpu.host.info import A100, H100
 from gpu.memory import AddressSpace
 from layout._ndbuffer_stub import (
     copy_from_nd_buffer,
@@ -49,13 +48,6 @@ from layout._ndbuffer_stub import (
     vectorize,
 )
 from layout.layout import *
-from layout.layout_tensor import (
-    LayoutTensor,
-    _swizzle_signature,
-    copy_dram_to_sram_async,
-    copy_local_to_dram,
-    copy_sram_to_local,
-)
 from linalg.matmul_tile_scheduler import MatmulSchedule
 from memory import bitcast, stack_allocation
 
@@ -353,13 +345,10 @@ fn _matmul_gpu[
 
     # NOTE: k has to be a multiple of BK * num_stages. Hard coded this condition to 128 for now.
     # TODO: Need to find a better dispatch strategy.
-    var h100_matmul_cond = (
-        ctx.device_info is H100 and n % 8 == 0 and a_type is DType.bfloat16
-    )
     var amdgpu_matmul_cond = has_amd_gpu_accelerator() and n % 4 == 0
     var multi_gemm_cond = (
         (m > 1 or (has_amd_gpu_accelerator() and transpose_b == False))
-        and (n % 128 == 0 or h100_matmul_cond or amdgpu_matmul_cond)
+        and (n % 128 == 0 or amdgpu_matmul_cond)
         and k % 32 == 0
         and k >= 128
     )
@@ -369,10 +358,6 @@ fn _matmul_gpu[
                       and a_shape.has_value[1]() \
                       and c_shape.has_value[1]()
     # fmt: on
-
-    alias use_A100_kernels_on_H100 = env_get_int[
-        "USE_EXPERIMENTAL_KERNELS", 0
-    ]()
 
     @parameter
     if (
@@ -740,10 +725,6 @@ fn _matmul_gpu[
                 )
                 return
 
-            alias use_A100_kernels = ctx.device_info is A100 or (
-                ctx.device_info is H100 and use_A100_kernels_on_H100 != 0
-            )
-
             var best_config = select_config[
                 a_type, b_type, c_type, transpose_b
             ](m, n, k, ctx)
@@ -1075,6 +1056,7 @@ fn multistage_gemm[
         )
 
     else:
+
         alias gemm_kernel_type = multistage_gemm_kernel[
             c_type,
             tensor_c.layout,
