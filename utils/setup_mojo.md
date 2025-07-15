@@ -13,15 +13,21 @@ podman run -it --privileged --network=host --ipc=host \
   docker.io/modular/max-amd:nightly
 ```
 
-Environment:
+Environment (https://docs.modular.com/mojo/manual/get-started/):
 ```
+# if you don't have it, install pixi
 curl -fsSL https://pixi.sh/install.sh | sh
 
+# create a project
 pixi init life \
   -c https://conda.modular.com/max-nightly/ -c conda-forge \
   && cd life
 
+# install the modular conda package
 pixi add modular
+
+# setup the VM
+pixi shell
 ```
 
 Run: 
