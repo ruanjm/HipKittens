@@ -15,23 +15,26 @@ torch.set_printoptions(
 )
 
 # Inputs
-ROWS = 256
-COLS = 64
+ROWS = 32
+COLS = 16
 
-A = torch.randn(ROWS, COLS, dtype=torch.bfloat16, device='cuda') / 10.0  
-C = torch.zeros(ROWS, COLS, dtype=torch.bfloat16, device='cuda')
+A = torch.randn(ROWS, COLS, dtype=torch.bfloat16, device='cuda') / 10.0
+B = torch.randn(ROWS, COLS, dtype=torch.bfloat16, device='cuda') / 10.0
+Bt = B.t().contiguous()
 
-tk_kernel.dispatch_micro(A, C)
+C = torch.zeros(ROWS, ROWS, dtype=torch.bfloat16, device='cuda')
+D = torch.zeros(ROWS, ROWS, dtype=torch.bfloat16, device='cuda')
 
-# C_ref = torch.matmul(A, A.t()).float()
-C_ref = A.float()
+tk_kernel.dispatch_micro(A, B, C, D)
+
+D_ref = torch.matmul(A.float(), Bt.float()).float() + C.float()
 
 print("Out")
-print(C[0:16, 0:8])
+print(D[0:16, 0:8])
 print("Ref")
-print(C_ref[0:16, 0:8])
+print(D_ref[0:16, 0:8])
 
-diff = C.float() - C_ref.float()
+diff = D.float() - D_ref.float()
 # print(f"diff[0:4]")
 # print(diff[0:4])
 

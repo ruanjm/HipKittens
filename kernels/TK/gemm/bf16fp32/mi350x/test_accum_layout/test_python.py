@@ -15,8 +15,8 @@ torch.set_printoptions(
 )
 
 # Inputs
-ROWS = 256
-COLS = 64
+ROWS = 32
+COLS = 32
 
 A = torch.randn(ROWS, COLS, dtype=torch.bfloat16, device='cuda') / 10.0  
 C = torch.zeros(ROWS, COLS, dtype=torch.bfloat16, device='cuda')
@@ -27,13 +27,13 @@ tk_kernel.dispatch_micro(A, C)
 C_ref = A.float()
 
 print("Out")
-print(C[0:16, 0:8])
+print(C)
 print("Ref")
-print(C_ref[0:16, 0:8])
+print(C_ref)
 
 diff = C.float() - C_ref.float()
-# print(f"diff[0:4]")
-# print(diff[0:4])
+print(f"diff")
+print(diff)
 
 # print(f"diff[4:8]")
 # print(diff[4:8])

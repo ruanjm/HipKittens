@@ -6,4 +6,5 @@ build/
 *.pyw
 *.pyz
 *.pywz
+*.rocprofv3
 utils/__pycache__/
