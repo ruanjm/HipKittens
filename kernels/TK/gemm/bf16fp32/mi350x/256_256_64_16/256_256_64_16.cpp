@@ -31,7 +31,7 @@ struct micro_globals {
     _gl_C c;
     dim3 grid()  { return dim3((N / BLOCK_SIZE) * (M / BLOCK_SIZE)); } 
     dim3 block() { return dim3(NUM_THREADS); } 
-    size_t dynamic_shared_memory() { return 132768; } 
+    size_t dynamic_shared_memory() { return MAX_SHARED_MEMORY; } 
 };
 
 __global__ __launch_bounds__(NUM_THREADS, 2)
@@ -80,7 +80,7 @@ void micro_tk(const micro_globals g) {
     // Load first tile into shared memory
     load_global_to_shared_direct<2, false, st_bf<BLOCK_SIZE, K_STEP>, _gl_A, coord<st_bf<BLOCK_SIZE, K_STEP>>, NUM_THREADS>(g.a, {0, 0, row, 0}, As[tic]);
     load_global_to_shared_direct<2, false, st_bf<BLOCK_SIZE, K_STEP>, _gl_B, coord<st_bf<BLOCK_SIZE, K_STEP>>, NUM_THREADS>(g.b, {0, 0, col, 0}, Bs[tic]);
-    __builtin_amdgcn_s_waitcnt(0);
+    asm volatile("s_waitcnt vmcnt(0)");
     __builtin_amdgcn_s_barrier();
 
     if (warp_row == 1) {
@@ -141,7 +141,7 @@ void micro_tk(const micro_globals g) {
         load_lds_reg(tiles[0], subtile_inplace<REG_BLOCK, DOT_SLICE>(Bs[tic], {warp_col, 3}));
         load_lds_reg(tiles[1], subtile_inplace<REG_BLOCK, DOT_SLICE>(As[tic], {warp_row, 3}));
         load_lds_reg(tiles[2], subtile_inplace<REG_BLOCK, DOT_SLICE>(As[tic], {warp_row + 2, 3}));
-        __builtin_amdgcn_s_waitcnt(0);
+        asm volatile("s_waitcnt vmcnt(0)");
         __builtin_amdgcn_s_barrier();
         __builtin_amdgcn_sched_barrier(0);
 
