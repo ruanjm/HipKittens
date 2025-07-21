@@ -32,7 +32,7 @@ struct micro_globals {
     _gl_C c;
     dim3 grid()  { return dim3((N / BLOCK_SIZE) * (M / BLOCK_SIZE)); } 
     dim3 block() { return dim3(NUM_THREADS); } 
-    size_t dynamic_shared_memory() { return 132768; } 
+    size_t dynamic_shared_memory() { return MAX_SHARED_MEMORY; } 
 };
 
 __global__ __launch_bounds__(NUM_THREADS, 2)

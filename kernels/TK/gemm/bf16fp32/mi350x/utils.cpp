@@ -246,11 +246,9 @@ __device__ inline void load_global_to_shared_direct(
     const GL& src, const COORD& idx, ST& dst)
 {
     using T = typename ST::dtype;
-    constexpr int bytes_per_thread = 16;
-    constexpr int bytes_per_memcpy = 16 * N_THREADS;
-    constexpr int memcpy_per_tile = ST::rows * ST::cols * sizeof(T) / bytes_per_memcpy;
+    constexpr int memcpy_per_tile = ST::rows * ST::cols * sizeof(T) / (16 * N_THREADS);
     
-    constexpr int elem_per_thread = bytes_per_thread / sizeof(T);  // e.g., 8 for bf16, 4 for fp32
+    constexpr int elem_per_thread = 16 / sizeof(T);  // e.g., 8 for bf16, 4 for fp32
     constexpr int elem_per_warp = elem_per_thread * kittens::WARP_THREADS;
     constexpr int threads_per_row = ST::cols / elem_per_thread; 
 
@@ -262,11 +260,14 @@ __device__ inline void load_global_to_shared_direct(
     uint32_t dst_ptr = reinterpret_cast<uintptr_t>(&dst.data[0]);
     int thread_id = threadIdx.x % N_THREADS;
     int warp_id = thread_id >> 6;
+    
+    const T* lds_base = &dst.data[0] + (kittens::warpid() * elem_per_warp);
 
     #pragma unroll
     for (int i = 0; i < memcpy_per_tile; i++) {
-        const int row_in_lds = (i * N_THREADS + thread_id) / threads_per_row;
-        const int col_in_lds = ((i * N_THREADS + thread_id) % threads_per_row) * elem_per_thread;
+        int offset_threads = (i * N_THREADS + threadIdx.x % N_THREADS);
+        const int row_in_lds = offset_threads / threads_per_row;
+        const int col_in_lds = (offset_threads % threads_per_row) * elem_per_thread;
         const int addr_in_lds = dst.idx(dst_ptr, {row_in_lds, col_in_lds});
 
         const int offset_in_lds = addr_in_lds - dst_ptr;
@@ -275,15 +276,14 @@ __device__ inline void load_global_to_shared_direct(
 
         const int offset_in_global = (swizzled_row_in_lds * row_stride + swizzled_col_in_lds) * sizeof(T);
 
-        const T* lds_base = &dst.data[0];
-        const T* lds_elem_ptr = lds_base + (i * N_THREADS * elem_per_thread) + (warp_id * elem_per_warp);
+        const T* lds_elem_ptr = lds_base + (i * N_THREADS * elem_per_thread);
         uintptr_t lds_addr = reinterpret_cast<uintptr_t>(lds_elem_ptr);
         as3_uint32_ptr lds_ptr = (as3_uint32_ptr)(lds_addr);
 
         llvm_amdgcn_raw_buffer_load_lds(
             srsrc, // buffer resource
             lds_ptr,
-            bytes_per_thread, // 16 bytes
+            16, // 16 bytes per thread
             offset_in_global,
             0, 
             0, // instruction offset
