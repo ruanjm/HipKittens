@@ -5,9 +5,9 @@
 using namespace kittens;
 
 #define ATTN_B 16 // batch size
-#define ATTN_H 16 // number of heads
-#define ATTN_N 1024 // sequence length
-#define ATTN_D 32 // dimension
+#define ATTN_H 32 // number of heads
+#define ATTN_N 4096 // sequence length
+#define ATTN_D 128 // dimension
 #define BLOCK_SIZE 32 // block size
 
 #define NUM_WARPS 4
@@ -98,7 +98,7 @@ void attend_ker(const attn_globals g) {
             __builtin_amdgcn_s_setprio(0);
             __builtin_amdgcn_s_barrier();
 
-            swap_layout(att_block_col, att_block);
+            att_block_col = swap_layout_inplace(att_block);
             __builtin_amdgcn_s_setprio(0);
             __builtin_amdgcn_s_barrier();
 
@@ -120,13 +120,13 @@ void attend_ker(const attn_globals g) {
             mul_row(o_reg, o_reg, max_vec_last); // O_i = exp(m_i - m_i_new) @ O_i + exp(m'_ij - m_i_new) * P'_ij @ V_j
             copy(att_block_col_bf16, att_block_col);
             
-            swap_layout(att_block_row_bf16, att_block_col_bf16);
+            att_block_row_bf16 = swap_layout_inplace(att_block_col_bf16);
             __builtin_amdgcn_s_setprio(0);
             __builtin_amdgcn_s_barrier();
 
             __builtin_amdgcn_s_setprio(1);
             mma_AB(o_reg_next, att_block_row_bf16, v_reg, o_reg_next);
-            swap_layout(o_reg_next_col, o_reg_next);
+            o_reg_next_col = swap_layout_inplace(o_reg_next);
             __builtin_amdgcn_s_setprio(0);
             __builtin_amdgcn_s_barrier();
             
