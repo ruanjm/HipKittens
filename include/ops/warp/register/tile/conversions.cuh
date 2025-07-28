@@ -78,7 +78,7 @@ namespace kittens {
      dst.data[7].y = dst_tmp[15];
  }
 
- template<typename T, ducks::rt_layout::accum layout>
+  template<typename T, ducks::rt_layout::accum layout>
  __device__ inline void swap_layout(rt_base<T, typename ducks::rt_layout::row> &dst, const rt_base<T, layout> &src) {
     const int lane = laneid();
 
@@ -291,6 +291,12 @@ __device__ inline rt_base<T2, DesiredLayout>& swap_layout_inplace(const rt_base<
     swap_layout(dst, src);
     return dst;
 }
+template<typename DstT, typename SrcT, ducks::rt_layout::accum layout>
+__device__ inline rt_base<DstT, typename ducks::rt_layout::row>& swap_layout_inplace_copy(const rt_base<SrcT, layout> &src) {
+    rt_base<DstT, typename ducks::rt_layout::row> &dst = *(rt_base<DstT, typename ducks::rt_layout::row>*)(&src);
+    swap_layout_copy(dst, src);
+    return dst;
+}
 #endif
 /**
  * @brief Swaps the layout of a register tile in place.
@@ -332,6 +338,18 @@ __device__ static inline rt<T2, _rows, _cols, DesiredLayout>& swap_layout_inplac
         }
     }
     return *(rt<T2, _rows, _cols, DesiredLayout>*)(&tile);
+}
+
+template<typename DstT, typename SrcT, int _rows, int _cols, ducks::rt_layout::accum layout>
+__device__ static inline rt<DstT, _rows, _cols, typename ducks::rt_layout::row>& swap_layout_inplace_copy(rt<SrcT, _rows, _cols, layout> &tile) {
+    #pragma unroll
+    for(int i = 0; i < tile.height; i++) {
+        #pragma unroll
+        for(int j = 0; j < tile.width; j++) {
+            swap_layout_inplace_copy<DstT, SrcT>(tile.tiles[i][j]);
+        }
+    }
+    return *(rt<DstT, _rows, _cols, typename ducks::rt_layout::row>*)(&tile);
 }
 #endif
 
