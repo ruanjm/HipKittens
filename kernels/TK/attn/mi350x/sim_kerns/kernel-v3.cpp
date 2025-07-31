@@ -79,7 +79,7 @@ __global__ void attend_ker(const attn_globals<D> g) {
     load(q_reg_fl, g.Qg, {batch_idx, head_idx, tile_idx, 0});
     mul(q_reg_fl, q_reg_fl, TEMPERATURE_SCALE);  // Use sqrtf for clarity
     copy(q_reg, q_reg_fl);
-    q_reg_transposed = swap_layout_and_transpose_inplace(q_reg);
+    swap_layout_and_transpose(q_reg_transposed, q_reg);
 
     zero(o_reg);
     zero(norm_vec);
@@ -108,7 +108,7 @@ __global__ void attend_ker(const attn_globals<D> g) {
             copy(max_vec_prev, max_vec); // Store previous max values
             // A = Q @ K.T (now temperature is fully applied)
             asm volatile("s_waitcnt lgkmcnt(4)\n");
-            k_reg_transposed = swap_layout_and_transpose_inplace(k_reg);
+            swap_layout_and_transpose(k_reg_transposed, k_reg);
             mma_AtB(att_block, k_reg_transposed, q_reg_transposed, att_block);
 
             // Update max in-place and compute correction
@@ -156,7 +156,7 @@ __global__ void attend_ker(const attn_globals<D> g) {
         copy(max_vec_prev, max_vec);
         // A = Q @ K.T (now temperature is fully applied)
         asm volatile("s_waitcnt lgkmcnt(8)\n");
-        k_reg_transposed = swap_layout_and_transpose_inplace(k_reg);
+        swap_layout_and_transpose(k_reg_transposed, k_reg);
         mma_AtB(att_block, k_reg_transposed, q_reg_transposed, att_block);
 
         // Update max in-place and compute correction
