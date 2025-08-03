@@ -105,12 +105,12 @@ __device__ inline void load_global_to_shared_direct(
     int thread_id = threadIdx.x % N_THREADS;
     int warp_id = thread_id >> 6;
     
-    const T* lds_base = &dst.data[0] + (kittens::warpid() * elem_per_warp);
+    const T* lds_base = &dst.data[0] + (warp_id * elem_per_warp);
 
     #pragma unroll
     for (int i = 0; i < memcpy_per_tile; i++) {
 
-        int offset_threads = (i * N_THREADS + threadIdx.x % N_THREADS);
+        int offset_threads = (i * N_THREADS + thread_id);
         const int row_in_lds = offset_threads / threads_per_row;
         const int col_in_lds = (offset_threads % threads_per_row) * elem_per_thread;
         const int addr_in_lds = dst.idx(dst_ptr, {row_in_lds, col_in_lds});
@@ -154,8 +154,7 @@ __device__ inline void prefill_swizzled_offsets(
     const int row_stride = src.template stride<axis>();
 
     uint32_t dst_ptr = reinterpret_cast<uintptr_t>(&dst.data[0]);
-    int thread_id = threadIdx.x % N_THREADS;
-    int warp_id = thread_id >> 6;
+    const int thread_id = threadIdx.x % N_THREADS;
 
     #pragma unroll
     for (int i = 0; i < memcpy_per_tile; i++) {
@@ -194,11 +193,11 @@ __device__ inline void load_global_to_shared_direct_with_swizzled_offsets(
 
     const int thread_id = threadIdx.x % N_THREADS;
     const int warp_id = thread_id >> 6;
+    const T* lds_base = &dst.data[0] + (warp_id * elem_per_warp);
 
     #pragma unroll
     for (int i = 0; i < memcpy_per_tile; i++) {
-        const T* lds_base = &dst.data[0];
-        const T* lds_elem_ptr = lds_base + (i * N_THREADS * elem_per_thread) + (warp_id * elem_per_warp);
+        const T* lds_elem_ptr = lds_base + (i * N_THREADS * elem_per_thread);
         uintptr_t lds_addr = reinterpret_cast<uintptr_t>(lds_elem_ptr);
         as3_uint32_ptr lds_ptr = (as3_uint32_ptr)(lds_addr);
 
@@ -288,8 +287,6 @@ __device__ inline static void load_lds_reg(RT &dst, const ST &src) {
             #pragma unroll
             for(int i = 0; i < dst.height; i++) {
 
-                int row = i*dst.tile_size_row + row_offset;
-
                 if constexpr (std::is_same_v<typename RT::layout, ducks::rt_layout::row>) { // handle the row-major layout
 
                     asm volatile(
@@ -300,6 +297,7 @@ __device__ inline static void load_lds_reg(RT &dst, const ST &src) {
                     );
                 }
                 else { // handle the column-major layout
+                    int row = i*dst.tile_size_row + row_offset;
                     dst.tiles[i][j].data[0+k*4] = base_types::convertor<T2, U2>::convert(U2{src[{row, col}], src[{row+1, col}]});
                     dst.tiles[i][j].data[1+k*4] = base_types::convertor<T2, U2>::convert(U2{src[{row+2, col}], src[{row+3, col}]});
                     dst.tiles[i][j].data[2+k*4] = base_types::convertor<T2, U2>::convert(U2{src[{row+4, col}], src[{row+5, col}]});

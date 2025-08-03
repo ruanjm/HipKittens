@@ -5,6 +5,7 @@
 constexpr int ATTN_B = 16; // batch size
 constexpr int ATTN_H = 64; // number of heads
 constexpr int ATTN_H_KV = 8; // number of heads for key and value
+constexpr int GROUP_SIZE = ATTN_H / ATTN_H_KV;
 constexpr int ATTN_N = 8192; // sequence length
 constexpr int ATTN_D = 128; // dimension
 constexpr int N_STEP = 128;
@@ -48,7 +49,7 @@ template<int D, typename T=float, typename L=accum_l> using attn_tile = rt<T, BL
 
 template<int D> struct attn_globals { 
     _gl_QKVO Qg, Kg, Vg, Og; 
-    dim3 grid() { return dim3(ATTN_B, ATTN_H, ((ATTN_N / BLOCK_SIZE + NUM_WARPS - 1) / NUM_WARPS)); }
+    dim3 grid() { return dim3(ATTN_H, ((ATTN_N / BLOCK_SIZE + NUM_WARPS - 1) / NUM_WARPS), ATTN_B); }
     dim3 block() { return dim3(NUM_THREADS); }
     size_t dynamic_shared_memory() { return MAX_SHARED_MEMORY; }
 };
@@ -61,11 +62,10 @@ __global__ void attend_ker(const attn_globals<D> g) {
     st_bf<N_STEP, ATTN_D> (&k_smem)[2] = al.allocate<st_bf<N_STEP, ATTN_D>, 2>();
     st_bf<N_STEP, ATTN_D> (&v_smem)[2] = al.allocate<st_bf<N_STEP, ATTN_D>, 2>();
     
-    const int batch_idx = blockIdx.x;
-    const int head_idx = blockIdx.y;
-    const int GROUP_SIZE = ATTN_H / ATTN_H_KV;
-    const int head_idx_kv = blockIdx.y / GROUP_SIZE;
-    const int block_tile_idx = blockIdx.z;
+    const int head_idx = (blockIdx.x % 8) * 8 + (blockIdx.x / 8);
+    const int batch_idx = blockIdx.z;
+    const int head_idx_kv = head_idx / GROUP_SIZE;
+    const int block_tile_idx = blockIdx.y;
     const int tile_idx = block_tile_idx * NUM_WARPS + warpid();
     const int stagger = warpid() / 4;
 

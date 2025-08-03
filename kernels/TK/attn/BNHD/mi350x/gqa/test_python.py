@@ -5,7 +5,6 @@ import time
 import math
 from torch.nn.functional import scaled_dot_product_attention
 import aiter
-from aiter.ops.triton.mha import flash_attn_func
 
 profiling = True
 using_aiter = True
