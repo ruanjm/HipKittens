@@ -179,29 +179,32 @@ __device__ inline void prefill_swizzled_offsets_fp6(
 {
 
     using T = typename ST::dtype;
-    constexpr int bytes_per_thread = 24;
-    constexpr int memcpy_per_tile =  ST::rows * ST::cols / (bytes_per_thread * N_THREADS);
+    constexpr int bytes_per_thread = 12;
+    constexpr int memcpy_per_tile =  (ST::rows * ST::cols * 6 / 8) / (bytes_per_thread * N_THREADS);
     static_assert(memcpy_per_tile > 0, "memcpy_per_tile must be greater than 0. Please decrease the number of threads.");
 
     constexpr int bytes_per_warp = bytes_per_thread * kittens::WARP_THREADS; // 16 * 64 = 1024
     const int warp_id = warpid();
+    const int num_subtiles = (kittens::TILE_COL_DIM<T> * kittens::TILE_ROW_DIM<T> * 6 / 8) / bytes_per_warp;
     // byte stride
-    const int row_stride = src.template stride<axis>() * 6 / 8;
+    const int row_stride = src.template stride<axis>();
 
     constexpr int num_warps = N_THREADS / kittens::WARP_THREADS;
     constexpr int num_register_tiles_per_row = ST::cols / kittens::TILE_COL_DIM<T>;
+    constexpr int register_subtile_cols = kittens::TILE_COL_DIM<T> / num_subtiles;
 
     #pragma unroll
     for (int i = 0; i < memcpy_per_tile; i++) {
 
-        const int register_tile_id = warp_id + i * num_warps;
+        const int register_tile_id = (warp_id + i * num_warps) / num_subtiles;
+        const int register_subtile_id = (warp_id + i * num_warps) % num_subtiles;
 
-        const int warp_col_offset = (register_tile_id % num_register_tiles_per_row) * kittens::TILE_COL_DIM<T>;
+        const int warp_col_offset = ((register_tile_id % num_register_tiles_per_row) * num_subtiles + register_subtile_id) * register_subtile_cols;
         const int warp_row_offset = (register_tile_id / num_register_tiles_per_row) * kittens::TILE_ROW_DIM<T>;
 
-        int col_offset = warp_col_offset + (laneid() / 32) * bytes_per_thread;
+        int col_offset = warp_col_offset + (laneid() / 32) * 16;
         int row_offset = warp_row_offset + (laneid() % 32); 
-        const int offset_in_global = row_offset * row_stride + col_offset;
+        const int offset_in_global = (row_offset * row_stride + col_offset) * 6 / 8;
 
         swizzled_offsets[i] = offset_in_global;
     }
@@ -218,58 +221,32 @@ __device__ inline void load_global_to_shared_direct_with_swizzled_offsets_fp6(
 {
 
     using U = typename ST::dtype;
-    constexpr int bytes_per_thread = 24;
-    constexpr int memcpy_per_tile =  ST::rows * ST::cols / (bytes_per_thread * N_THREADS);
+    constexpr int bytes_per_thread = 12;
+    constexpr int memcpy_per_tile =  (ST::rows * ST::cols * 6 / 8)  / (bytes_per_thread * N_THREADS);
     static_assert(memcpy_per_tile > 0, "memcpy_per_tile must be greater than 0. Please decrease the number of threads.");
     
     constexpr int elem_per_warp = bytes_per_thread * kittens::WARP_THREADS;
 
     // byte stride
-    const int row_stride = src.template stride<axis>() * 6 / 8;
+    const int row_stride = src.template stride<axis>();
     coord<> unit_coord = idx.template unit_coord<axis, 3>();
-    U* global_ptr = (U*)&src[unit_coord]; // TODO: check if this is correct
-    i32x4 srsrc = make_srsrc(global_ptr, row_stride * ST::rows);
+    auto* global_ptr = reinterpret_cast<const uint8_t*>(&src[unit_coord]);
+    i32x4 srsrc = make_srsrc(global_ptr, row_stride * ST::rows * 6 / 8); // size in BYTES
 
     const int warp_id = warpid();
-    const U* lds_base = &dst.data[warp_id * elem_per_warp];
+    auto* lds_bytes = reinterpret_cast<uint8_t*>(&dst.data[0]);
+    const uint8_t* lds_base = lds_bytes + warp_id * elem_per_warp;
 
     #pragma unroll
     for (int i = 0; i < memcpy_per_tile; i++) {
-        const U* lds_elem_ptr = lds_base + (i * N_THREADS * bytes_per_thread);
-        uintptr_t lds_addr = reinterpret_cast<uintptr_t>(lds_elem_ptr);
-        as3_uint32_ptr lds_ptr = (as3_uint32_ptr)(lds_addr);
-
-        const U* lds_elem_ptr_b32 = lds_elem_ptr + (16 * kittens::WARP_THREADS);
-        uintptr_t lds_addr_b32 = reinterpret_cast<uintptr_t>(lds_elem_ptr_b32);
-        as3_uint32_ptr lds_ptr_b32 = (as3_uint32_ptr)(lds_addr_b32);
-
-        const U* lds_elem_ptr_b32_next = lds_elem_ptr + (20 * kittens::WARP_THREADS);
-        uintptr_t lds_addr_b32_next = reinterpret_cast<uintptr_t>(lds_elem_ptr_b32_next);
-        as3_uint32_ptr lds_ptr_b32_next = (as3_uint32_ptr)(lds_addr_b32_next);
+        const uint8_t* lds_elem_ptr = lds_base + i * N_THREADS * 16;
+        as3_uint32_ptr lds_ptr = (as3_uint32_ptr)reinterpret_cast<uintptr_t>(lds_elem_ptr);
 
         llvm_amdgcn_raw_buffer_load_lds(
             srsrc, // buffer resource
             lds_ptr,
-            16, // 16 bytes
+            12, // 12 bytes
             swizzled_offsets[i],
-            0, 
-            0, // instruction offset
-            static_cast<index_t>(coherency::cache_all)); // cache coherency
-
-        llvm_amdgcn_raw_buffer_load_lds(
-            srsrc, // buffer resource
-            lds_ptr_b32,
-            4, // 4 bytes
-            swizzled_offsets[i] + 16,
-            0, 
-            0, // instruction offset
-            static_cast<index_t>(coherency::cache_all)); // cache coherency
-
-        llvm_amdgcn_raw_buffer_load_lds(
-            srsrc, // buffer resource
-            lds_ptr_b32_next,
-            4, // 4 bytes
-            swizzled_offsets[i] + 20,
             0, 
             0, // instruction offset
             static_cast<index_t>(coherency::cache_all)); // cache coherency
@@ -292,11 +269,11 @@ __device__ inline void load_global_to_shared_direct_with_swizzled_offsets_fp6(
  
      using U  = ST::dtype;
      const int laneid = kittens::laneid();
-     const uint32_t addr_b128 = reinterpret_cast<uintptr_t>(&src.data[0] + laneid * 16);
-     const uint32_t addr_b32 = reinterpret_cast<uintptr_t>(&src.data[0] + kittens::WARP_THREADS * 16 + laneid * 4);
-     const uint32_t addr_b32_next = reinterpret_cast<uintptr_t>(&src.data[0] + kittens::WARP_THREADS * 20 + laneid * 4);
+     auto* lds_bytes = reinterpret_cast<const uint8_t*>(&src.data[0]);
+     const uint32_t addr = reinterpret_cast<uintptr_t>(lds_bytes + laneid * 16);
 
-     const int tile_stride = kittens::TILE_ROW_DIM<U> * kittens::TILE_COL_DIM<U> * 6 / 8;
+     const int subtile_stride = kittens::TILE_ROW_DIM<U> * kittens::TILE_COL_DIM<U> * sizeof(U) / 2;
+     const int tile_stride = subtile_stride * 2;
      const int row_stride = tile_stride * dst.width;
  
      #pragma unroll
@@ -304,19 +281,18 @@ __device__ inline void load_global_to_shared_direct_with_swizzled_offsets_fp6(
 
         #pragma unroll
         for(int j = 0; j < dst.width; j++) {
-            asm volatile(
-                "ds_read_b128 %0, %3 offset:%6\n"
-                "ds_read_b32 %1, %4 offset:%6\n"
-                "ds_read_b32 %2, %5 offset:%6\n"
-                "s_waitcnt lgkmcnt(0)\n"
-                : "=v"(*reinterpret_cast<float4*>((&dst.tiles[i][j].data[0]))),
-                  "=v"(*reinterpret_cast<float*>((&dst.tiles[i][j].data[0] + 16))),
-                  "=v"(*reinterpret_cast<float*>((&dst.tiles[i][j].data[0] + 20)))
-                : "v"(addr_b128), "v"(addr_b32), "v"(addr_b32_next), 
-                  "i"(i * row_stride + j * tile_stride)
-                : "memory"
-            );
-         }
+
+            #pragma unroll
+            for (int k = 0; k < 2; k++) {
+                asm volatile(
+                    "ds_read_b96 %0, %1 offset:%2\n"
+                    : "=v"(*reinterpret_cast<__uint96_t*>((reinterpret_cast<uint8_t*>(&dst.tiles[i][j].data[0]) + k * 12)))
+                    : "v"(addr),
+                    "i"(i * row_stride + j * tile_stride + k * subtile_stride)
+                    : "memory"
+                );
+            }
+        }
      }
  }
 
@@ -327,12 +303,12 @@ __device__ inline static void store_fp6(const GL &dst, const RT &src, const COOR
     using U2 = base_types::packing<U>::packed_type;
 
     U *dst_ptr = (U*)&dst[(idx.template unit_coord<axis, 3>())];
-    const int row_stride = dst.template stride<axis>() * 6 / 8;
+    const int row_stride = dst.template stride<axis>();
     int laneid = kittens::laneid();
 
-    int row_offset = laneid%32, col_offset = 24*(laneid/32);
+    int row_offset = laneid%32, col_offset = 16*(laneid/32);
 
-    i32x4 srsrc = make_srsrc(dst_ptr, row_stride * RT::rows);
+    i32x4 srsrc = make_srsrc(dst_ptr, row_stride * RT::rows * 6 / 8);
 
     #pragma unroll
     for(int i = 0; i < src.height; i++) {
@@ -340,13 +316,14 @@ __device__ inline static void store_fp6(const GL &dst, const RT &src, const COOR
         
         #pragma unroll
         for(int j = 0; j < src.width; j++) {
-            int col = src.tile_size_col*j + col_offset;
-            
-            const __uint128_t tmp = *reinterpret_cast<const __uint128_t*>((&src.tiles[i][j].data[0]));
-            llvm_amdgcn_raw_buffer_store_b128(tmp, srsrc, row*row_stride + col, 0, 0);
 
-            const uint64_t tmp_b64 = *reinterpret_cast<const uint64_t*>((&src.tiles[i][j].data[16]));
-            llvm_amdgcn_raw_buffer_store_b64(tmp_b64, srsrc, row*row_stride + col + 16, 0, 0);
+            #pragma unroll
+            for (int k = 0; k < 2; k++) {
+                int col = src.tile_size_col*j + col_offset + k * 32;
+                
+                const __uint96_t val_b96 = *reinterpret_cast<const __uint96_t*>((reinterpret_cast<const uint8_t*>(&src.tiles[i][j].data[0]) + k * 12));
+                llvm_amdgcn_raw_buffer_store_b96(val_b96, srsrc, (row*row_stride + col) * 6 / 8, 0, 0);
+            }
         }
     }
 }
