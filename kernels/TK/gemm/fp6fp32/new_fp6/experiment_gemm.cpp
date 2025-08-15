@@ -86,7 +86,7 @@ void micro_tk(const micro_globals g) {
     // Swizzle chiplet so that wgids are in the same XCD.
     wgid = (wgid % NUM_XCDS) * (NUM_WGS / NUM_XCDS) + (wgid / NUM_XCDS);
     // Swizzle for better L2 within the same XCD.
-    const int WGM = 16;
+    const int WGM = 8;
     const int num_pid_m = ceil_div(M, BLOCK_SIZE);
     const int num_pid_n = ceil_div(N, BLOCK_SIZE);
     int num_wgid_in_group = WGM * num_pid_n;
@@ -121,14 +121,16 @@ void micro_tk(const micro_globals g) {
     // Load first tile into shared memory
     load_global_to_shared_direct_with_swizzled_offsets_fp6<2, false, st_f6<BLOCK_SIZE, K_STEP>, _gl_A, coord<st_f6<BLOCK_SIZE, K_STEP>>, NUM_THREADS>(g.a, {0, 0, row, 0}, *As_ptrs[0], swizzled_offsets_A);
     load_global_to_shared_direct_with_swizzled_offsets_fp6<2, false, st_f6<BLOCK_SIZE, K_STEP>, _gl_B, coord<st_f6<BLOCK_SIZE, K_STEP>>, NUM_THREADS>(g.b, {0, 0, col, 0}, *Bs_ptrs[0], swizzled_offsets_B);
-    load_global_to_shared_direct_with_swizzled_offsets_fp6<2, false, st_f6<BLOCK_SIZE, K_STEP>, _gl_A, coord<st_f6<BLOCK_SIZE, K_STEP>>, NUM_THREADS>(g.a, {0, 0, row, 1}, *As_ptrs[1], swizzled_offsets_A);
-    load_global_to_shared_direct_with_swizzled_offsets_fp6<2, false, st_f6<BLOCK_SIZE, K_STEP>, _gl_B, coord<st_f6<BLOCK_SIZE, K_STEP>>, NUM_THREADS>(g.b, {0, 0, col, 1}, *Bs_ptrs[1], swizzled_offsets_B);
     __builtin_amdgcn_s_waitcnt(0);
     __builtin_amdgcn_s_barrier();
 
+    // Load second tile into shared memory
+    load_global_to_shared_direct_with_swizzled_offsets_fp6<2, false, st_f6<BLOCK_SIZE, K_STEP>, _gl_A, coord<st_f6<BLOCK_SIZE, K_STEP>>, NUM_THREADS>(g.a, {0, 0, row, 1}, *As_ptrs[1], swizzled_offsets_A);
+    load_global_to_shared_direct_with_swizzled_offsets_fp6<2, false, st_f6<BLOCK_SIZE, K_STEP>, _gl_B, coord<st_f6<BLOCK_SIZE, K_STEP>>, NUM_THREADS>(g.b, {0, 0, col, 1}, *Bs_ptrs[1], swizzled_offsets_B);
+    // Load first tile into registers
     load_lds_reg_row_fp6(B_tile[0], subtile_inplace<REG_BLOCK_N, DOT_SLICE>(*Bs_ptrs[tic], {warp_col, 0}));
     load_lds_reg_row_fp6(A_tile[0], subtile_inplace<REG_BLOCK_M, DOT_SLICE>(*As_ptrs[tic], {warp_row, 0}));
-    __builtin_amdgcn_s_waitcnt(0);
+    // __builtin_amdgcn_s_waitcnt(0);
     __builtin_amdgcn_s_barrier();
 
     if (warp_row == 1) {
@@ -270,7 +272,7 @@ int main() {
     // random number generator
     std::random_device rd;
     std::mt19937 gen(rd());
-    std::uniform_real_distribution<> dis(-0.0f, 4.0f);
+    std::uniform_real_distribution<> dis(-0.1f, 0.1f);
 
     // Initialize with different values
     for (int i = 0; i < M * K; i++) {
@@ -309,7 +311,7 @@ int main() {
 
     // Warmup
     // Warmup
-    const int WARMUP_REPS = 10;
+    const int WARMUP_REPS = 500;
     for (int r = 0; r < WARMUP_REPS; ++r) { 
         micro_tk<<<globals.grid(), globals.block(), globals.dynamic_shared_memory(), stream>>>(globals);
     }
@@ -386,16 +388,17 @@ int main() {
                           << " (diff: " << diff << " / threshold: " << threshold << ")\n";
                 num_printed++;
             }
-        } else {
-            if (num_printed_correct < 5) {
+        } 
+        // else {
+        if (num_printed_correct < 5) {
                 int row = i / N;
                 int col = i % N;
                 std::cout << "[" << row << "," << col << "] CPU: " << float(cpu_result[i]) 
                           << " GPU: " << h_output_float 
                           << " (diff: " << diff << " / threshold: " << threshold << ")\n";
                 num_printed_correct++;
-            }
         }
+        // }
     }
 
     std::cout << "Average diff: " << total_diff / (M * N) << std::endl;
