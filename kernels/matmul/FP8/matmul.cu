@@ -193,6 +193,8 @@ TimingResult matmul_ref(const std::vector<fp8e4m3>& a, const std::vector<fp8e4m3
 template <int M, int N, int K>
 __global__ __launch_bounds__(512, 2) void matmul_device(const kittens::gl<fp8e4m3, 1, 1, M, K> A, const kittens::gl<fp8e4m3, 1, 1, N, K> B, const kittens::gl<float, 1, 1, M, N> C) {
     // Each threadblock computes 256x256 output tile
+    constexpr int WARPS_COL = 2;
+    constexpr int WARPS_ROW = 4;
     constexpr int BLOCK_SIZE_ROW = 256;
     constexpr int BLOCK_SIZE_COL = 256;
     constexpr int BLOCK_K = 64;
@@ -206,9 +208,9 @@ __global__ __launch_bounds__(512, 2) void matmul_device(const kittens::gl<fp8e4m
     __shared__ st<fp8e4m3, BLOCK_SIZE_COL, BLOCK_K> Bs;
 
     // Register tiles: 64x64 per warp
-    rt_fp8e4m3<64, 64> a;
-    rt_fp8e4m3<128, 64> b;
-    rt_fl<64, 128, kittens::ducks::rt_layout::accumulator> c;
+    rt_fp8e4m3<BLOCK_SIZE_ROW / WARPS_ROW, BLOCK_K> a;
+    rt_fp8e4m3<BLOCK_SIZE_COL / WARPS_COL, BLOCK_K> b;
+    rt_fl<BLOCK_SIZE_ROW / WARPS_ROW, BLOCK_SIZE_COL / WARPS_COL, kittens::ducks::rt_layout::accumulator> c;
 
     // Calculate how many outer iterations needed based on available threadblocks
     int outer_iters = (total_blocks_needed + gridDim.x - 1) / gridDim.x;
@@ -246,8 +248,8 @@ __global__ __launch_bounds__(512, 2) void matmul_device(const kittens::gl<fp8e4m
             __builtin_amdgcn_sched_barrier(0);
 
             // Each warp loads its 64x64 portion from shared memory using subtiles
-            auto as_subtile = kittens::subtile_inplace<64, 64>(As, {warp_m, 0});
-            auto bs_subtile = kittens::subtile_inplace<128, 64>(Bs, {warp_n, 0});
+            auto as_subtile = kittens::subtile_inplace<BLOCK_SIZE_ROW / WARPS_ROW, BLOCK_K>(As, {warp_m, 0});
+            auto bs_subtile = kittens::subtile_inplace<BLOCK_SIZE_COL / WARPS_COL, BLOCK_K>(Bs, {warp_n, 0});
             load(a, as_subtile);
             load(b, bs_subtile);
 
