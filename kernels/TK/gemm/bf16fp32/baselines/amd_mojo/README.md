@@ -35,7 +35,7 @@ Run benchmark:
 mojo test_kernel.mojo
 ```
 
-Results:
+## GEMM Results:
 | Kernel (dim)        | met (ms)           | iters | Arithmetic (GFLOPS/s) |
 | ----------- | ------------------ | ----- | --------------------- |
 | Mojo matmul (1024) | 0.015481722        | 1000  | 138710.9036062009     |
@@ -43,4 +43,14 @@ Results:
 | Mojo matmul (4096)| 0.25926358         | 1000  | 530112.8429685342     |
 | Mojo matmul (8192) | 1.4052444756820877 | 843   | 782434.4068261225     |
 | Mojo matmul (16384) | 12.003901405940592 | 101   | 732769.5159054635     |
+
+
+## MHA Results
+
+Slow :( 
+Also it's non-causal so fewer flops than reported?
+
+| name                                  | met (ms)           | iters | Arithmetic (GFLOPS/s) |
+| ------------------------------------- | ------------------ | ----- | --------------------- |
+| AMD_FlashAttention_2048x2048_16h_128d | 4.4123881137724545 | 501   | 124593.71200190636    |
 
