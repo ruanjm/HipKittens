@@ -203,17 +203,6 @@ __device__ inline static void store(ST &dst, const RT &src) {
                         : "memory"
                     );
                 } else {
-                    // asm volatile(
-                    //     "ds_read_b64_tr_b16 %0, %2 offset:%3\n"
-                    //     "ds_read_b64_tr_b16 %1, %2 offset:%4\n"
-                    //     : "=v"(*reinterpret_cast<float2*>(&dst.tiles[i][j].data[k*4])), 
-                    //     "=v"(*reinterpret_cast<float2*>(&dst.tiles[i][j].data[k*4 + 2]))
-                    //     : "v"(addr),
-                    //     "i"(i * row_stride + j * tile_stride + k * subtile_stride),
-                    //     "i"(i * row_stride + j * tile_stride + k * subtile_stride + (4 * kittens::TILE_ROW_DIM<U> * sizeof(U)))
-                    //     : "memory"
-                    // ); 
-
                     U2 tmp[4];
                     tmp[0] = base_types::convertor<U2, T2>::convert(src.tiles[i][j].data[k*4]);
                     tmp[1] = base_types::convertor<U2, T2>::convert(src.tiles[i][j].data[k*4 + 1]);
