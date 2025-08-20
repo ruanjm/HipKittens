@@ -49,16 +49,17 @@ __device__ inline void load(ST& dst, const GL& src, const COORD& idx)
 
     using T = typename ST::dtype;
     static_assert(sizeof(T) == 2, "only supporting 16-bit dtypes");
-    constexpr int memcpy_per_tile =  ST::rows * ST::cols * sizeof(T) / (16 * N_THREADS); // 16 --> 32
+    constexpr int bytes_per_thread = 16;
+    constexpr int memcpy_per_tile =  ST::rows * ST::cols * sizeof(T) / (bytes_per_thread * N_THREADS); // 16 --> 32
     static_assert(memcpy_per_tile > 0, "memcpy_per_tile must be greater than 0. Please decrease the number of threads.");
     
-    constexpr int elem_per_thread = 16 / sizeof(T);  // 8 if bf16, 16 if fp8
+    constexpr int elem_per_thread = bytes_per_thread / sizeof(T);  // 8 if bf16, 16 if fp8
     constexpr int elem_per_warp = elem_per_thread * kittens::WARP_THREADS; // 512 if bf16, 1024 if fp8
-    const int laneid = kittens::laneid();
-    const int warp_id = warpid();
+    const int laneid = kittens::laneid() % N_THREADS;
+    const int warp_id = laneid / N_THREADS;
     const int row_stride = src.template stride<axis>();
 
-    constexpr int num_warps = N_THREADS / 64;
+    constexpr int num_warps = N_THREADS / kittens::WARP_THREADS;
     constexpr int num_register_subtiles = kittens::TILE_ROW_DIM<T> * kittens::TILE_COL_DIM<T> / elem_per_warp;
     constexpr int num_register_tiles_per_row = ST::cols / kittens::TILE_ROW_DIM<T>;
 
@@ -74,35 +75,39 @@ __device__ inline void load(ST& dst, const GL& src, const COORD& idx)
         const int register_tile_id = (warp_id + i * num_warps) / num_register_subtiles;
         const int register_subtile_id = (warp_id + i * num_warps) % num_register_subtiles;
 
-        int row_offset, col_offset; 
+        int offset_in_global;
 
         if constexpr (std::is_same_v<typename ST::layout, ducks::st_layout::row>) {
-            const int register_subtile_cols = kittens::TILE_COL_DIM<T> / num_register_subtiles;
-            const int num_register_subtiles_per_row = num_register_tiles_per_row * num_register_subtiles;
-            const int warp_col_offset = ((register_tile_id % num_register_tiles_per_row) * num_register_subtiles + register_subtile_id) * register_subtile_cols;
-            const int warp_row_offset = (register_tile_id / num_register_tiles_per_row) * kittens::TILE_ROW_DIM<T>;
+            const int register_subtile_rows = kittens::TILE_ROW_DIM<T> / num_register_subtiles;
+            const int num_register_subtiles_per_row = num_register_tiles_per_row;
+            const int warp_col_offset = (register_tile_id % num_register_subtiles_per_row) * kittens::TILE_COL_DIM<T>;
+            const int warp_row_offset = ((register_tile_id / num_register_subtiles_per_row) * num_register_subtiles + register_subtile_id) * register_subtile_rows;
 
-            col_offset = warp_col_offset + (laneid / 32) * elem_per_thread;
-            row_offset = warp_row_offset + (laneid % 32);
+            const int lane_col_byte_offset = (laneid % 4) * bytes_per_thread;
+            const int lane_row_offset = ((laneid % kittens::WARP_THREADS) / 4);
+            const int swizzle = ((lane_row_offset * kittens::TILE_COL_DIM<T> * sizeof(T)) >> 8) << 4;
+
+            const int swizzled_lane_col_byte_offset = lane_col_byte_offset ^ swizzle;
+            offset_in_global = ((warp_row_offset + lane_row_offset) * row_stride + warp_col_offset) * sizeof(T) + swizzled_lane_col_byte_offset;
         } else if constexpr (std::is_same_v<typename ST::layout, ducks::st_layout::col>) {
             const int register_subtile_rows = kittens::TILE_ROW_DIM<T> / num_register_subtiles;
             const int num_register_subtiles_per_row = num_register_tiles_per_row;
             const int warp_col_offset = (register_tile_id % num_register_subtiles_per_row) * kittens::TILE_COL_DIM<T>;
             const int warp_row_offset = ((register_tile_id / num_register_subtiles_per_row) * num_register_subtiles + register_subtile_id) * register_subtile_rows;
     
-            col_offset = warp_col_offset + (laneid % 4) * elem_per_thread;
-            row_offset = warp_row_offset + (laneid / 4);
+            const int col_offset = warp_col_offset + (laneid % 4) * elem_per_thread;
+            const int row_offset = warp_row_offset + (laneid / 4);
+            offset_in_global = (row_offset * row_stride + col_offset) * sizeof(T);
         } else {
             const int register_subtile_rows = kittens::TILE_ROW_DIM<T> / num_register_subtiles;
             const int num_register_subtiles_per_row = num_register_tiles_per_row;
             const int warp_col_offset = (register_tile_id % num_register_subtiles_per_row) * kittens::TILE_COL_DIM<T>;
             const int warp_row_offset = ((register_tile_id / num_register_subtiles_per_row) * num_register_subtiles + register_subtile_id) * register_subtile_rows;
     
-            col_offset = warp_col_offset + (laneid % 4) * elem_per_thread;
-            row_offset = warp_row_offset + get_accum_thread_row_offset(laneid / 4);
+            const int col_offset = warp_col_offset + (laneid % 4) * elem_per_thread;
+            const int row_offset = warp_row_offset + get_accum_thread_row_offset(laneid / 4);
+            offset_in_global = (row_offset * row_stride + col_offset) * sizeof(T);
         }
-
-        const int offset_in_global = (row_offset * row_stride + col_offset) * sizeof(T);
 
         const T* lds_elem_ptr = lds_base + (i * N_THREADS * elem_per_thread);
         uintptr_t lds_addr = reinterpret_cast<uintptr_t>(lds_elem_ptr);
@@ -122,6 +127,120 @@ __device__ inline void load(ST& dst, const GL& src, const COORD& idx)
 template<ducks::st::all ST, ducks::gl::all GL, ducks::coord::tile COORD=coord<ST>>
 __device__ static inline void load(ST &dst, const GL &src, const COORD &idx) {
     load<2, false, ST, GL, COORD, WARP_THREADS>(dst, src, idx);
+}
+
+template<int axis, bool assume_aligned,
+         ducks::st::all ST, ducks::gl::all GL,
+         ducks::coord::tile COORD = coord<ST>,
+         int N_THREADS = WARP_THREADS>
+__device__ inline void prefill_swizzled_offsets(
+    const GL& src, const COORD& idx, ST& dst, uint32_t* swizzled_offsets)
+{
+
+    using T = typename ST::dtype;
+    constexpr int bytes_per_thread = 16;
+    constexpr int memcpy_per_tile =  ST::rows * ST::cols * sizeof(T) / (bytes_per_thread * N_THREADS); // 16 --> 32
+    static_assert(memcpy_per_tile > 0, "memcpy_per_tile must be greater than 0. Please decrease the number of threads.");
+    
+    constexpr int elem_per_thread = bytes_per_thread / sizeof(T);  // 8
+    constexpr int elem_per_warp = elem_per_thread * kittens::WARP_THREADS; // 512
+    const int laneid = kittens::laneid() % N_THREADS;
+    const int warp_id = laneid / N_THREADS;
+    const int row_stride = src.template stride<axis>();
+
+    constexpr int num_warps = N_THREADS / 64;
+    constexpr int num_register_subtiles = kittens::TILE_ROW_DIM<T> * kittens::TILE_COL_DIM<T> / elem_per_warp;
+    constexpr int num_register_tiles_per_row = ST::cols / kittens::TILE_ROW_DIM<T>;
+
+    #pragma unroll
+    for (int i = 0; i < memcpy_per_tile; i++) {
+
+        const int register_tile_id = (warp_id + i * num_warps) / num_register_subtiles;
+        const int register_subtile_id = (warp_id + i * num_warps) % num_register_subtiles;
+
+        if constexpr (std::is_same_v<typename ST::layout, ducks::st_layout::row>) {
+            const int register_subtile_rows = kittens::TILE_ROW_DIM<T> / num_register_subtiles;
+            const int num_register_subtiles_per_row = num_register_tiles_per_row;
+            const int warp_col_offset = (register_tile_id % num_register_subtiles_per_row) * kittens::TILE_COL_DIM<T>;
+            const int warp_row_offset = ((register_tile_id / num_register_subtiles_per_row) * num_register_subtiles + register_subtile_id) * register_subtile_rows;
+
+            const int lane_col_byte_offset = (laneid % 4) * bytes_per_thread;
+            const int lane_row_offset = ((laneid % kittens::WARP_THREADS) / 4);
+            const int swizzle = ((lane_row_offset * kittens::TILE_COL_DIM<T> * sizeof(T)) >> 8) << 4;
+
+            const int swizzled_lane_col_byte_offset = lane_col_byte_offset ^ swizzle;
+
+            const int offset_in_global = ((warp_row_offset + lane_row_offset) * row_stride + warp_col_offset) * sizeof(T) + swizzled_lane_col_byte_offset;
+            swizzled_offsets[i] = offset_in_global;
+        } else if constexpr (std::is_same_v<typename ST::layout, ducks::st_layout::col>) {
+            const int register_subtile_rows = kittens::TILE_ROW_DIM<T> / num_register_subtiles;
+            const int num_register_subtiles_per_row = num_register_tiles_per_row;
+            const int warp_col_offset = (register_tile_id % num_register_subtiles_per_row) * kittens::TILE_COL_DIM<T>;
+            const int warp_row_offset = ((register_tile_id / num_register_subtiles_per_row) * num_register_subtiles + register_subtile_id) * register_subtile_rows;
+    
+            const int col_offset = warp_col_offset + (laneid % 4) * elem_per_thread;
+            const int row_offset = warp_row_offset + (laneid / 4);
+
+            const int offset_in_global = (row_offset * row_stride + col_offset) * sizeof(T);
+            swizzled_offsets[i] = offset_in_global;
+        } else {
+            const int register_subtile_rows = kittens::TILE_ROW_DIM<T> / num_register_subtiles;
+            const int num_register_subtiles_per_row = num_register_tiles_per_row;
+            const int warp_col_offset = (register_tile_id % num_register_subtiles_per_row) * kittens::TILE_COL_DIM<T>;
+            const int warp_row_offset = ((register_tile_id / num_register_subtiles_per_row) * num_register_subtiles + register_subtile_id) * register_subtile_rows;
+    
+            const int col_offset = warp_col_offset + (laneid % 4) * elem_per_thread;
+            const int row_offset = warp_row_offset + get_accum_thread_row_offset(laneid / 4);
+
+            const int offset_in_global = (row_offset * row_stride + col_offset) * sizeof(T);
+            swizzled_offsets[i] = offset_in_global;
+        }
+    }
+}
+
+template<int axis, bool assume_aligned,
+         ducks::st::all ST, ducks::gl::all GL,
+         ducks::coord::tile COORD = coord<ST>,
+         int N_THREADS = WARP_THREADS>
+__device__ inline void load(ST& dst, const GL& src, const COORD& idx, uint32_t* swizzled_offsets)
+{
+    using T = typename ST::dtype;
+    static_assert(sizeof(T) == 2, "only supporting 16-bit dtypes");
+    constexpr int bytes_per_memcpy = 16 * N_THREADS;
+    constexpr int memcpy_per_tile = ST::rows * ST::cols * sizeof(T) / bytes_per_memcpy;
+    static_assert(memcpy_per_tile > 0, "memcpy_per_tile must be greater than 0. Please decrease the number of threads.");
+    
+    constexpr int elem_per_thread = 16 / sizeof(T);  // e.g., 8 for bf16, 4 for fp32
+    constexpr int elem_per_warp = elem_per_thread * kittens::WARP_THREADS;
+
+    const int row_stride = src.template stride<axis>();
+    coord<> unit_coord = idx.template unit_coord<axis, 3>();
+    T* global_ptr = (T*)&src[unit_coord];
+    i32x4 srsrc = make_srsrc(global_ptr, row_stride * ST::rows * sizeof(T));
+
+    const int warp_id = warpid();
+    const T* lds_base = &dst.data[0] + (warp_id * elem_per_warp);
+
+    #pragma unroll
+    for (int i = 0; i < memcpy_per_tile; i++) {
+        const T* lds_elem_ptr = lds_base + (i * N_THREADS * elem_per_thread);
+        uintptr_t lds_addr = reinterpret_cast<uintptr_t>(lds_elem_ptr);
+        as3_uint32_ptr lds_ptr = (as3_uint32_ptr)(lds_addr);
+
+        llvm_amdgcn_raw_buffer_load_lds(
+            srsrc, // buffer resource
+            lds_ptr,
+            16, // 16 bytes
+            swizzled_offsets[i],
+            0, 
+            0, // instruction offset
+            static_cast<index_t>(coherency::cache_all)); // cache coherency
+    }
+}
+
+template<ducks::st::all ST, ducks::gl::all GL, ducks::coord::tile COORD=coord<ST>>
+__device__ static inline void load(ST &dst, const GL &src, const COORD &idx, uint32_t* swizzled_offsets) {
+    load<2, false, ST, GL, COORD, WARP_THREADS>(dst, src, idx, swizzled_offsets);
 }
 #else
 template< int  axis, bool assume_aligned,
@@ -213,16 +332,17 @@ __device__ static inline void store(const GL &dst, const ST &src, const COORD &i
     using U = typename GL::dtype;
     using T = typename ST::dtype;
     static_assert(sizeof(T) == 2, "only supporting 16-bit dtypes");
-    constexpr int memcpy_per_tile =  ST::rows * ST::cols * sizeof(T) / (16 * N_THREADS); // 16 --> 32
+    constexpr int bytes_per_thread = 16;
+    constexpr int memcpy_per_tile =  ST::rows * ST::cols * sizeof(T) / (bytes_per_thread * N_THREADS); // 16 --> 32
     static_assert(memcpy_per_tile > 0, "memcpy_per_tile must be greater than 0. Please decrease the number of threads.");
 
     const int laneid = kittens::laneid() % N_THREADS;
-    const int elem_per_thread = 16 / sizeof(T); // 8 
+    const int elem_per_thread = bytes_per_thread / sizeof(T); // 8 
     constexpr int elem_per_warp = elem_per_thread * kittens::WARP_THREADS; // 512
     const int warp_id = laneid / N_THREADS;
     const int row_stride = dst.template stride<axis>();
 
-    constexpr int num_warps = N_THREADS / 64;
+    constexpr int num_warps = N_THREADS / kittens::WARP_THREADS;
     constexpr int num_register_subtiles = kittens::TILE_ROW_DIM<T> * kittens::TILE_COL_DIM<T> / elem_per_warp;
     constexpr int num_register_tiles_per_row = ST::cols / kittens::TILE_ROW_DIM<T>;
 
@@ -237,35 +357,42 @@ __device__ static inline void store(const GL &dst, const ST &src, const COORD &i
         const int register_tile_id = (warp_id + i * num_warps) / num_register_subtiles;
         const int register_subtile_id = (warp_id + i * num_warps) % num_register_subtiles;
 
-        int row_offset, col_offset;
+        int offset_in_global;
 
         if constexpr (std::is_same_v<typename ST::layout, ducks::st_layout::row>) {
-            const int register_subtile_cols = kittens::TILE_COL_DIM<T> / num_register_subtiles;
-            const int num_register_subtiles_per_row = num_register_tiles_per_row * num_register_subtiles;
-            const int warp_col_offset = ((register_tile_id % num_register_tiles_per_row) * num_register_subtiles + register_subtile_id) * register_subtile_cols;
-            const int warp_row_offset = (register_tile_id / num_register_tiles_per_row) * kittens::TILE_ROW_DIM<T>;
+            const int register_subtile_rows = kittens::TILE_ROW_DIM<T> / num_register_subtiles;
+            const int num_register_subtiles_per_row = num_register_tiles_per_row;
+            const int warp_col_offset = (register_tile_id % num_register_subtiles_per_row) * kittens::TILE_COL_DIM<T>;
+            const int warp_row_offset = ((register_tile_id / num_register_subtiles_per_row) * num_register_subtiles + register_subtile_id) * register_subtile_rows;
 
-            col_offset = warp_col_offset + (laneid / 32) * elem_per_thread;
-            row_offset = warp_row_offset + (laneid % 32);
+            const int lane_col_byte_offset = (laneid % 4) * bytes_per_thread;
+            const int lane_row_offset = ((laneid % kittens::WARP_THREADS) / 4);
+            const int swizzle = ((lane_row_offset * kittens::TILE_COL_DIM<T> * sizeof(T)) >> 8) << 4;
+
+            const int swizzled_lane_col_byte_offset = lane_col_byte_offset ^ swizzle;
+            offset_in_global = ((warp_row_offset + lane_row_offset) * row_stride + warp_col_offset) + (swizzled_lane_col_byte_offset / sizeof(T));
         } else if constexpr (std::is_same_v<typename ST::layout, ducks::st_layout::col>) {
             const int register_subtile_rows = kittens::TILE_ROW_DIM<T> / num_register_subtiles;
             const int num_register_subtiles_per_row = num_register_tiles_per_row;
             const int warp_col_offset = (register_tile_id % num_register_subtiles_per_row) * kittens::TILE_COL_DIM<T>;
             const int warp_row_offset = ((register_tile_id / num_register_subtiles_per_row) * num_register_subtiles + register_subtile_id) * register_subtile_rows;
     
-            col_offset = warp_col_offset + (laneid % 4) * elem_per_thread;
-            row_offset = warp_row_offset + (laneid / 4);
+            const int col_offset = warp_col_offset + (laneid % 4) * elem_per_thread;
+            const int row_offset = warp_row_offset + (laneid / 4);
+
+            offset_in_global = (row_offset * row_stride + col_offset);
         } else {
             const int register_subtile_rows = kittens::TILE_ROW_DIM<T> / num_register_subtiles;
             const int num_register_subtiles_per_row = num_register_tiles_per_row;
             const int warp_col_offset = (register_tile_id % num_register_subtiles_per_row) * kittens::TILE_COL_DIM<T>;
             const int warp_row_offset = ((register_tile_id / num_register_subtiles_per_row) * num_register_subtiles + register_subtile_id) * register_subtile_rows;
     
-            col_offset = warp_col_offset + (laneid % 4) * elem_per_thread;
-            row_offset = warp_row_offset + get_accum_thread_row_offset(laneid / 4);
+            const int col_offset = warp_col_offset + (laneid % 4) * elem_per_thread;
+            const int row_offset = warp_row_offset + get_accum_thread_row_offset(laneid / 4);
+
+            offset_in_global = (row_offset * row_stride + col_offset);
         }
 
-        const int offset_in_global = (row_offset * row_stride + col_offset);
         const T* lds_elem_ptr = lds_base + (i * N_THREADS * elem_per_thread);
 
         global_ptr[offset_in_global] = lds_elem_ptr[laneid * elem_per_thread];
