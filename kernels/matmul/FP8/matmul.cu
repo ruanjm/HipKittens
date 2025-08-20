@@ -243,7 +243,7 @@ __global__ __launch_bounds__(512, 2) void matmul_device(const kittens::gl<fp8e4m
     constexpr int BLOCK_SIZE_ROW = 256;
     constexpr int BLOCK_SIZE_COL = 256;
     constexpr int BLOCK_K = 128;
-    constexpr int k_step = BLOCK_K;
+    constexpr int k_step = BLOCK_K / 2;
     constexpr int blocks_row = M / BLOCK_SIZE_ROW; // Number of blocks along output matrix row dim
     constexpr int blocks_col = N / BLOCK_SIZE_COL; // Number of blocks along output matrix col dim
     constexpr int total_blocks_needed = blocks_row * blocks_col;
@@ -268,25 +268,23 @@ __global__ __launch_bounds__(512, 2) void matmul_device(const kittens::gl<fp8e4m
     int warp_m = (warpid() / WARPS_COL);
     int warp_n = (warpid() % WARPS_COL);
 
+    int curr = 0, next = 1;
+
     zero(c);
+
+    load<2, false, kittens::ducks::rt_layout::row, st<fp8e4m3, BLOCK_SIZE_ROW, BLOCK_K>, kittens::gl<fp8e4m3, 1, 1, M, K>, coord<st<fp8e4m3, BLOCK_SIZE_ROW, BLOCK_K>>, NUM_WARPS*WARP_THREADS>(As[curr], A, {0, 0, block_row, 0});
+    load<2, false, kittens::ducks::rt_layout::row, st<fp8e4m3, BLOCK_SIZE_COL, BLOCK_K>, kittens::gl<fp8e4m3, 1, 1, N, K>, coord<st<fp8e4m3, BLOCK_SIZE_COL, BLOCK_K>>, NUM_WARPS*WARP_THREADS>(Bs[curr], B, {0, 0, block_col, 0});
+    __builtin_amdgcn_s_waitcnt(0);
+    __builtin_amdgcn_sched_barrier(0);
 
     // Two stage pipeline
     if (2*warpid() / NUM_WARPS == 1) {
         __builtin_amdgcn_s_barrier();
     }
 
-    int curr = 0, next = 1;
-
-    load<2, false, kittens::ducks::rt_layout::row, st<fp8e4m3, BLOCK_SIZE_ROW, BLOCK_K>, kittens::gl<fp8e4m3, 1, 1, M, K>, coord<st<fp8e4m3, BLOCK_SIZE_ROW, BLOCK_K>>, NUM_WARPS*WARP_THREADS>(As[curr], A, {0, 0, block_row, 0});
-    load<2, false, kittens::ducks::rt_layout::row, st<fp8e4m3, BLOCK_SIZE_COL, BLOCK_K>, kittens::gl<fp8e4m3, 1, 1, N, K>, coord<st<fp8e4m3, BLOCK_SIZE_COL, BLOCK_K>>, NUM_WARPS*WARP_THREADS>(Bs[curr], B, {0, 0, block_col, 0});
-
-    __builtin_amdgcn_s_waitcnt(0);
-    __builtin_amdgcn_s_barrier();
-    __builtin_amdgcn_sched_barrier(0);
-
     // Inner loop over K dimension
     for (int k = 0; k < k_iters - 1; k++, curr ^= 1, next ^= 1) {
-        __builtin_amdgcn_s_waitcnt(0);
+
         __builtin_amdgcn_s_barrier();
         __builtin_amdgcn_sched_barrier(0);
 
@@ -295,6 +293,21 @@ __global__ __launch_bounds__(512, 2) void matmul_device(const kittens::gl<fp8e4m
         auto as_subtile = kittens::subtile_inplace<BLOCK_SIZE_ROW / WARPS_ROW, k_step>(As[curr], {warp_m, 0});
         load(a, as_subtile);
         auto bs_subtile = kittens::subtile_inplace<BLOCK_SIZE_COL / WARPS_COL, k_step>(Bs[curr], {warp_n, 0});
+        load(b, bs_subtile);
+
+        asm volatile("s_waitcnt lgkmcnt(0)");
+        __builtin_amdgcn_s_barrier();  // synchronizes all warps
+        __builtin_amdgcn_sched_barrier(0); // stops compiler from reordering ops
+
+        // Compute: C += A * B^T
+        mma_ABt(c, a, b, c);
+
+        __builtin_amdgcn_s_barrier();
+        __builtin_amdgcn_sched_barrier(0);
+
+        as_subtile = kittens::subtile_inplace<BLOCK_SIZE_ROW / WARPS_ROW, k_step>(As[curr], {warp_m, 1});
+        load(a, as_subtile);
+        bs_subtile = kittens::subtile_inplace<BLOCK_SIZE_COL / WARPS_COL, k_step>(Bs[curr], {warp_n, 1});
         load(b, bs_subtile);
 
         __builtin_amdgcn_s_waitcnt(0);
@@ -309,18 +322,36 @@ __global__ __launch_bounds__(512, 2) void matmul_device(const kittens::gl<fp8e4m
     __builtin_amdgcn_s_barrier();
     __builtin_amdgcn_sched_barrier(0);
 
-    auto as_subtile = kittens::subtile_inplace<BLOCK_SIZE_ROW / WARPS_ROW, BLOCK_K>(As[curr], {warp_m, 0});
+    auto as_subtile = kittens::subtile_inplace<BLOCK_SIZE_ROW / WARPS_ROW, k_step>(As[curr], {warp_m, 0});
     load(a, as_subtile);
-    auto bs_subtile = kittens::subtile_inplace<BLOCK_SIZE_COL / WARPS_COL, BLOCK_K>(Bs[curr], {warp_n, 0});
+    auto bs_subtile = kittens::subtile_inplace<BLOCK_SIZE_COL / WARPS_COL, k_step>(Bs[curr], {warp_n, 0});
     load(b, bs_subtile);
 
-    __builtin_amdgcn_s_waitcnt(0);
+    asm volatile("s_waitcnt lgkmcnt(0)");
+    __builtin_amdgcn_s_barrier();
+    __builtin_amdgcn_sched_barrier(0);
+
+    mma_ABt(c, a, b, c);
+
+    __builtin_amdgcn_s_barrier();
+    __builtin_amdgcn_sched_barrier(0);
+
+    as_subtile = kittens::subtile_inplace<BLOCK_SIZE_ROW / WARPS_ROW, k_step>(As[curr], {warp_m, 1});
+    load(a, as_subtile);
+    bs_subtile = kittens::subtile_inplace<BLOCK_SIZE_COL / WARPS_COL, k_step>(Bs[curr], {warp_n, 1});
+    load(b, bs_subtile);
+
+    asm volatile("s_waitcnt lgkmcnt(0)");
     __builtin_amdgcn_sched_barrier(0);
 
     mma_ABt(c, a, b, c);
 
     // Store result: each warp stores its 64x64 result
     store(C, c, {0, 0, block_row * WARPS_ROW + warp_m, block_col * WARPS_COL + warp_n});
+
+    if (2*warpid() / NUM_WARPS == 0) {
+        __builtin_amdgcn_s_barrier();
+    }
 }
 
 template <int M, int N, int K, int CUs>
