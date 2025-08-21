@@ -199,7 +199,7 @@ template<int axis, bool assume_aligned,
          ducks::st::all ST, ducks::gl::all GL,
          ducks::coord::tile COORD = coord<ST>,
          int N_THREADS = WARP_THREADS>
-__device__ inline void load(ST& dst, const GL& src, const COORD& idx, uint32_t* swizzled_offsets)
+__device__ inline void load(ST& dst, const GL& src, const COORD& idx, const uint32_t* swizzled_offsets)
 {
     using T = typename ST::dtype;
     static_assert(sizeof(T) == 2, "only supporting 16-bit dtypes");
@@ -236,7 +236,7 @@ __device__ inline void load(ST& dst, const GL& src, const COORD& idx, uint32_t* 
 }
 
 template<ducks::st::all ST, ducks::gl::all GL, ducks::coord::tile COORD=coord<ST>>
-__device__ static inline void load(ST &dst, const GL &src, const COORD &idx, uint32_t* swizzled_offsets) {
+__device__ static inline void load(ST &dst, const GL &src, const COORD &idx, const uint32_t* swizzled_offsets) {
     load<2, false, ST, GL, COORD, WARP_THREADS>(dst, src, idx, swizzled_offsets);
 }
 #else
