@@ -369,11 +369,11 @@ __global__ __launch_bounds__(256, 1) void matmul_device(const kittens::gl<fp8e4m
     load<2, false, kittens::ducks::rt_layout::row, st<fp8e4m3, BLOCK_SIZE_ROW, BLOCK_K>, kittens::gl<fp8e4m3, 1, 1, M, K>, coord<st<fp8e4m3, BLOCK_SIZE_ROW, BLOCK_K>>, NUM_WARPS*WARP_THREADS>(As[curr], A, {0, 0, block_row, 0});
     load<2, false, kittens::ducks::rt_layout::row, st<fp8e4m3, BLOCK_SIZE_COL, BLOCK_K>, kittens::gl<fp8e4m3, 1, 1, N, K>, coord<st<fp8e4m3, BLOCK_SIZE_COL, BLOCK_K>>, NUM_WARPS*WARP_THREADS>(Bs[curr], B, {0, 0, block_col, 0});
 
+    zero(c);
+
     __builtin_amdgcn_s_waitcnt(0);
     __builtin_amdgcn_s_barrier();
     __builtin_amdgcn_sched_barrier(0);
-
-    zero(c);
     
     // Load persistent register tiles for first iteration
     auto as_subtile = kittens::subtile_inplace<BLOCK_SIZE_ROW / WARPS_ROW, k_step>(As[curr], {warp_m, 0});
@@ -387,7 +387,6 @@ __global__ __launch_bounds__(256, 1) void matmul_device(const kittens::gl<fp8e4m
     load(b[1], bs_subtile1);
 
     asm volatile("s_waitcnt lgkmcnt(0)");
-    __builtin_amdgcn_s_barrier();
     __builtin_amdgcn_sched_barrier(0);
 
     load<2, false, kittens::ducks::rt_layout::row, st<fp8e4m3, BLOCK_SIZE_ROW, BLOCK_K>, kittens::gl<fp8e4m3, 1, 1, M, K>, coord<st<fp8e4m3, BLOCK_SIZE_ROW, BLOCK_K>>, NUM_WARPS*WARP_THREADS>(As[next], A, {0, 0, block_row, 1});
@@ -409,7 +408,6 @@ __global__ __launch_bounds__(256, 1) void matmul_device(const kittens::gl<fp8e4m
         // this is doing the kth mma
         __builtin_amdgcn_s_setprio(1);
         mma_ABt(c, a[0], b[0], c);
-        __builtin_amdgcn_sched_barrier(0);
         mma_ABt(c, a[1], b[1], c);
         __builtin_amdgcn_s_setprio(0);
 
@@ -424,11 +422,13 @@ __global__ __launch_bounds__(256, 1) void matmul_device(const kittens::gl<fp8e4m
         auto bs_subtile1_temp = kittens::subtile_inplace<BLOCK_SIZE_COL / WARPS_COL, k_step>(Bs[next], {warp_n, 1});
         load(b_temp[1], bs_subtile1_temp);
 
-        __builtin_amdgcn_s_waitcnt(0);
-        __builtin_amdgcn_s_barrier();
         __builtin_amdgcn_sched_barrier(0);
 
         curr ^= 1; next ^= 1;
+
+        __builtin_amdgcn_s_waitcnt(0);
+        __builtin_amdgcn_s_barrier();
+        __builtin_amdgcn_sched_barrier(0);
 
         // === ITERATION k+1 ===  
         // Load shared memory for k+2 while computing k+1 (no conditionals - always load)
@@ -437,7 +437,6 @@ __global__ __launch_bounds__(256, 1) void matmul_device(const kittens::gl<fp8e4m
         
         __builtin_amdgcn_s_setprio(1);
         mma_ABt(c, a_temp[0], b_temp[0], c);
-        __builtin_amdgcn_sched_barrier(0);
         mma_ABt(c, a_temp[1], b_temp[1], c);
         __builtin_amdgcn_s_setprio(0);
 
@@ -452,18 +451,19 @@ __global__ __launch_bounds__(256, 1) void matmul_device(const kittens::gl<fp8e4m
         auto bs_subtile1_next = kittens::subtile_inplace<BLOCK_SIZE_COL / WARPS_COL, k_step>(Bs[next], {warp_n, 1});
         load(b[1], bs_subtile1_next);
 
-        __builtin_amdgcn_s_waitcnt(0);
-        __builtin_amdgcn_s_barrier();
         __builtin_amdgcn_sched_barrier(0);
 
         curr ^= 1; next ^= 1;
+
+        __builtin_amdgcn_s_waitcnt(0);
+        __builtin_amdgcn_s_barrier();
+        __builtin_amdgcn_sched_barrier(0);
     }
 
     // Handle final pair (k_iters-2, k_iters-1)
     // Compute k_iters-2 with persistent registers
     __builtin_amdgcn_s_setprio(1);
     mma_ABt(c, a[0], b[0], c);
-    __builtin_amdgcn_sched_barrier(0);
     mma_ABt(c, a[1], b[1], c);
     __builtin_amdgcn_s_setprio(0);
 
@@ -478,16 +478,13 @@ __global__ __launch_bounds__(256, 1) void matmul_device(const kittens::gl<fp8e4m
     auto bs_subtile1_final = kittens::subtile_inplace<BLOCK_SIZE_COL / WARPS_COL, k_step>(Bs[next], {warp_n, 1});
     load(b_temp[1], bs_subtile1_final);
 
-    __builtin_amdgcn_s_waitcnt(0);
-    __builtin_amdgcn_s_barrier();
+    asm volatile("s_waitcnt lgkmcnt(0)");
     __builtin_amdgcn_sched_barrier(0);
 
     __builtin_amdgcn_s_setprio(1);
     mma_ABt(c, a_temp[0], b_temp[0], c);
-    __builtin_amdgcn_sched_barrier(0);
     mma_ABt(c, a_temp[1], b_temp[1], c);
     __builtin_amdgcn_s_setprio(0);
-
 
     // Store result: each warp stores its 64x64 result
     store(C, c, {0, 0, block_row * WARPS_ROW + warp_m, block_col * WARPS_COL + warp_n});
