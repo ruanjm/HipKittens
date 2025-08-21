@@ -462,7 +462,14 @@ __global__ __launch_bounds__(256, 1) void matmul_device(const kittens::gl<fp8e4m
         __builtin_amdgcn_sched_barrier(0);
     }
 
-    // Handle final pair (k_iters-2, k_iters-1) - no more global loads needed
+    // Load final k_iters-1 data that we missed
+    load<2, false, kittens::ducks::rt_layout::row, st<fp8e4m3, BLOCK_SIZE_ROW, BLOCK_K>, kittens::gl<fp8e4m3, 1, 1, M, K>, coord<st<fp8e4m3, BLOCK_SIZE_ROW, BLOCK_K>>, NUM_WARPS*WARP_THREADS>(As[next], A, {0, 0, block_row, k_iters - 1});
+    load<2, false, kittens::ducks::rt_layout::row, st<fp8e4m3, BLOCK_SIZE_COL, BLOCK_K>, kittens::gl<fp8e4m3, 1, 1, N, K>, coord<st<fp8e4m3, BLOCK_SIZE_COL, BLOCK_K>>, NUM_WARPS*WARP_THREADS>(Bs[next], B, {0, 0, block_col, k_iters - 1});
+    __builtin_amdgcn_s_waitcnt(0);
+    __builtin_amdgcn_s_barrier();
+    __builtin_amdgcn_sched_barrier(0);
+
+    // Handle final pair (k_iters-2, k_iters-1)
     // Compute k_iters-2 with persistent registers
     __builtin_amdgcn_s_setprio(1);
     mma_ABt(c, a[0], b[0], c);
@@ -474,15 +481,15 @@ __global__ __launch_bounds__(256, 1) void matmul_device(const kittens::gl<fp8e4m
     __builtin_amdgcn_s_barrier();
     __builtin_amdgcn_sched_barrier(0);
 
-    // Load and compute final iteration k_iters-1 from As[curr], Bs[curr]
-    auto as_subtile_final = kittens::subtile_inplace<BLOCK_SIZE_ROW / WARPS_ROW, k_step>(As[curr], {warp_m, 0});
+    // Load and compute final iteration k_iters-1 from As[next], Bs[next]
+    auto as_subtile_final = kittens::subtile_inplace<BLOCK_SIZE_ROW / WARPS_ROW, k_step>(As[next], {warp_m, 0});
     load(a_temp[0], as_subtile_final);
-    auto bs_subtile_final = kittens::subtile_inplace<BLOCK_SIZE_COL / WARPS_COL, k_step>(Bs[curr], {warp_n, 0});
+    auto bs_subtile_final = kittens::subtile_inplace<BLOCK_SIZE_COL / WARPS_COL, k_step>(Bs[next], {warp_n, 0});
     load(b_temp[0], bs_subtile_final);
 
-    auto as_subtile1_final = kittens::subtile_inplace<BLOCK_SIZE_ROW / WARPS_ROW, k_step>(As[curr], {warp_m, 1});
+    auto as_subtile1_final = kittens::subtile_inplace<BLOCK_SIZE_ROW / WARPS_ROW, k_step>(As[next], {warp_m, 1});
     load(a_temp[1], as_subtile1_final);
-    auto bs_subtile1_final = kittens::subtile_inplace<BLOCK_SIZE_COL / WARPS_COL, k_step>(Bs[curr], {warp_n, 1});
+    auto bs_subtile1_final = kittens::subtile_inplace<BLOCK_SIZE_COL / WARPS_COL, k_step>(Bs[next], {warp_n, 1});
     load(b_temp[1], bs_subtile1_final);
 
     __builtin_amdgcn_s_waitcnt(0);
