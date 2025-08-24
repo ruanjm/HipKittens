@@ -57,29 +57,41 @@ __device__ inline static void load(RV &dst, const GL &src, const COORD &idx) {
 
 
         #pragma unroll
-        for(auto w = 0; w < (dst.outer_dim+1)/2; w++) {
+        for(auto w = 0; w < dst.outer_dim/2; w++) {
             const int o_dim = w*2;
             const int other_o_dim = o_dim + 1;
             if constexpr (std::is_same_v<T, float>) {
                 uint2_t res = __builtin_amdgcn_permlane32_swap(__float_as_uint(dst[o_dim][0]), __float_as_uint(dst[o_dim][0]), false, true);
                 dst[o_dim][0] = __uint_as_float(res.x);
-                if (other_o_dim < dst.outer_dim) {
-                    dst[other_o_dim][0] = __uint_as_float(res.y);
-                }
+                dst[other_o_dim][0] = __uint_as_float(res.y);
             }
             else if constexpr (std::is_same_v<T, bf16>) {
                 uint2_t res = __builtin_amdgcn_permlane32_swap(__bfloat16_as_ushort(dst[o_dim][0]), __bfloat16_as_ushort(dst[o_dim][0]), false, true);
                 dst[o_dim][0] = __ushort_as_bfloat16(res.x);
-                if (other_o_dim < dst.outer_dim) {
-                    dst[other_o_dim][0] = __ushort_as_bfloat16(res.y);
-                }
+                dst[other_o_dim][0] = __ushort_as_bfloat16(res.y);
             }
             else if constexpr (std::is_same_v<T, half>) {
                 uint2_t res = __builtin_amdgcn_permlane32_swap(__half_as_ushort(dst[o_dim][0]), __half_as_ushort(dst[o_dim][0]), false, true);
                 dst[o_dim][0] = __ushort_as_half(res.x);
-                if (other_o_dim < dst.outer_dim) {
-                    dst[other_o_dim][0] = __ushort_as_half(res.y);
-                }
+                dst[other_o_dim][0] = __ushort_as_half(res.y);
+            } else {
+                static_assert(false, "Unsupported type");
+            }
+        }
+
+        if constexpr (RV::outer_dim % 2 == 1) {
+            const int o_dim = dst.outer_dim - 1;
+            if constexpr (std::is_same_v<T, float>) {
+                uint2_t res = __builtin_amdgcn_permlane32_swap(__float_as_uint(dst[o_dim][0]), __float_as_uint(dst[o_dim][0]), false, true);
+                dst[o_dim][0] = __uint_as_float(res.x);
+            }
+            else if constexpr (std::is_same_v<T, bf16>) {
+                uint2_t res = __builtin_amdgcn_permlane32_swap(__bfloat16_as_ushort(dst[o_dim][0]), __bfloat16_as_ushort(dst[o_dim][0]), false, true);
+                dst[o_dim][0] = __ushort_as_bfloat16(res.x);
+            }
+            else if constexpr (std::is_same_v<T, half>) {
+                uint2_t res = __builtin_amdgcn_permlane32_swap(__half_as_ushort(dst[o_dim][0]), __half_as_ushort(dst[o_dim][0]), false, true);
+                dst[o_dim][0] = __ushort_as_half(res.x);
             } else {
                 static_assert(false, "Unsupported type");
             }

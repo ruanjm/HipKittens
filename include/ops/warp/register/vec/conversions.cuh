@@ -10,25 +10,6 @@
 
 namespace kittens {
 
-namespace detail {
-
-// i am not smart enough to figure out these indices without these helpers :/
-// again, blame nvidia for these stupid, stupid layouts
-__device__ static inline int row_from_indices_dim2(int laneid, int inner_dim, int x_or_y) {
-    return 8*inner_dim + (laneid%4)*2 + x_or_y;
-}
-__device__ static inline int row_from_indices_dim1(int laneid, int x_or_y) {
-    return 8*x_or_y + (laneid/4);
-}
-__device__ static inline int canonical_src_lane_dim2(int row) {
-    return (row/2)%4 + 4*(row%2); // draw even rows from 0...3 and odds from 4...7
-}
-__device__ static inline int canonical_src_lane_dim1(int row) {
-    return (row*4)%32;
-}
-
-}
-
 /**
  * @brief Copies data from one register vector to another.
  *
@@ -37,11 +18,19 @@ __device__ static inline int canonical_src_lane_dim1(int row) {
  * @param dst[out] The destination register vector.
  * @param src[in] The source register vector to copy from.
  */
+#ifdef KITTENS_CDNA4
 template<ducks::rv::all RV1, ducks::rv::all RV2>
 __device__ static inline void copy(RV1 &dst, const RV2 &src) {
     static_assert(RV1::length == RV2::length, "Register vectors must be the same length.");
     using D1 = RV1::dtype;
     using D2 = RV2::dtype;
+
+    using D1_1 = base_types::packing<D1>::unpacked_type;
+    using D1_2 = base_types::packing<D1_1>::packed_type;
+
+    using D2_1 = base_types::packing<D2>::unpacked_type;
+    using D2_2 = base_types::packing<D2_1>::packed_type;
+
     if constexpr (std::is_same_v<typename RV1::layout, typename RV2::layout>) { // just a simple copy / typecast
         #pragma unroll
         for(int i = 0; i < RV1::outer_dim; i++) {
@@ -54,108 +43,160 @@ __device__ static inline void copy(RV1 &dst, const RV2 &src) {
     else { // Inner dimensions are not the same, this is really a layout conversion.
         int laneid = kittens::laneid();
         if constexpr (std::is_same_v<typename RV1::layout, ortho_l> && std::is_same_v<typename RV2::layout, align_l>) { // align -> ortho layout
+            const int give = (laneid % 16) / 2;
+            const int x_or_y = (laneid % 16) % 2;
+            const int take = (((laneid % 16) / 8) * 32) + ((laneid / 16) * 8) + (laneid % 8);
             #pragma unroll
             for(int i = 0; i < RV1::outer_dim; i++) {
-                dst[i][0].x = packed_shfl_sync(
-                    kittens::MASK_ALL,
-                    laneid < 4 ? src[i][0].x : src[i][0].y, // mirrors canonical_src_lane_dim2
-                    detail::canonical_src_lane_dim2(detail::row_from_indices_dim1(laneid, 0))
-                );
-                dst[i][0].y = packed_shfl_sync(
-                    kittens::MASK_ALL,
-                    laneid < 4 ? src[i][1].x : src[i][1].y, // mirrors canonical_src_lane_dim2
-                    detail::canonical_src_lane_dim2(detail::row_from_indices_dim1(laneid, 1))
-                );
+                D2_1 val = x_or_y ? src[i][give].y : src[i][give].x;
+                dst[i][0] = __float2bfloat16(__shfl(__bfloat162float(val), take));
             }
         }
         else if constexpr (std::is_same_v<typename RV1::layout, align_l> && std::is_same_v<typename RV2::layout, ortho_l>) { // ortho -> align layout
+            const int lane_offset = 32 * ((laneid % 32) / 16) + 8 * (laneid / 32);
+            const int inner_lane = laneid % 16;
             #pragma unroll
             for(int i = 0; i < RV1::outer_dim; i++) {
-                dst[i][0].x = packed_shfl_sync(
-                    kittens::MASK_ALL,
-                    src[i][0].x, // first 8 rows
-                    detail::canonical_src_lane_dim1(detail::row_from_indices_dim2(laneid, 0, 0))
-                );
-                dst[i][0].y = packed_shfl_sync(
-                    kittens::MASK_ALL,
-                    src[i][0].x, // first 8 rows
-                    detail::canonical_src_lane_dim1(detail::row_from_indices_dim2(laneid, 0, 1))
-                );
-                dst[i][1].x = packed_shfl_sync(
-                    kittens::MASK_ALL,
-                    src[i][0].y, // last 8 rows
-                    detail::canonical_src_lane_dim1(detail::row_from_indices_dim2(laneid, 1, 0))
-                );
-                dst[i][1].y = packed_shfl_sync(
-                    kittens::MASK_ALL,
-                    src[i][0].y, // last 8 rows
-                    detail::canonical_src_lane_dim1(detail::row_from_indices_dim2(laneid, 1, 1))
-                );
+                
+                #pragma unroll
+                for(int j = 0; j < 16; j++) {
+                    const int inner_dim = (inner_lane ^ j);
+                    const int take = lane_offset + (inner_dim % 8) + 16 * (inner_dim / 8);
+                    const int x_or_y = take % 2;
+
+                    D2_1 val = __float2bfloat16(__shfl(__bfloat162float(src[i][0]), take));
+
+                    if (x_or_y) {
+                        dst[i][inner_dim / 2].y = val;
+                    }
+                    else {
+                        dst[i][inner_dim / 2].x = val;
+                    }
+                }
             }
         }
         else if constexpr (std::is_same_v<typename RV1::layout, ortho_l> && std::is_same_v<typename RV2::layout, naive_l>) { // naive -> ortho layout
             #pragma unroll
-            for(int i = 0; i < RV1::outer_dim; i++) {
-                dst[i][0].x = packed_shfl_sync(
-                    kittens::MASK_ALL, src[i/2][0],
-                    16*(i%2) + 0 + (laneid/4)
-                );
-                dst[i][0].y = packed_shfl_sync(
-                    kittens::MASK_ALL, src[i/2][0],
-                    16*(i%2) + 8 + (laneid/4)
-                );
+            for(int i = 0; i < RV1::outer_dim / 2; i++) {
+
+                if constexpr (std::is_same_v<D2_1, float>) {
+                    uint2_t res = __builtin_amdgcn_permlane32_swap(__float_as_uint(src[i][0]), __float_as_uint(src[i][0]), false, true);
+                    dst[i * 2][0] = __uint_as_float(res.x);
+                    dst[i * 2 + 1][0] = __uint_as_float(res.y);
+                }
+                else if constexpr (std::is_same_v<D2_1, bf16>) {
+                    uint2_t res = __builtin_amdgcn_permlane32_swap(__bfloat16_as_ushort(src[i][0]), __bfloat16_as_ushort(src[i][0]), false, true);
+                    dst[i * 2][0] = __ushort_as_bfloat16(res.x);
+                    dst[i * 2 + 1][0] = __ushort_as_bfloat16(res.y);
+                }
+                else if constexpr (std::is_same_v<D2_1, half>) {
+                    uint2_t res = __builtin_amdgcn_permlane32_swap(__half_as_ushort(src[i][0]), __half_as_ushort(src[i][0]), false, true);
+                    dst[i * 2][0] = __ushort_as_half(res.x);
+                    dst[i * 2 + 1][0] = __ushort_as_half(res.y);
+                } else {
+                    static_assert(false, "Unsupported type");
+                }
+
+            }
+
+            if constexpr (RV1::outer_dim % 2 == 1) {
+                if constexpr (std::is_same_v<D2_1, float>) {
+                    uint2_t res = __builtin_amdgcn_permlane32_swap(__float_as_uint(src[RV2::outer_dim - 1][0]), __float_as_uint(src[RV2::outer_dim - 1][0]), false, true);
+                    dst[RV1::outer_dim - 1][0] = __uint_as_float(res.x);
+                }
+                else if constexpr (std::is_same_v<D2_1, bf16>) {
+                    uint2_t res = __builtin_amdgcn_permlane32_swap(__bfloat16_as_ushort(src[RV2::outer_dim - 1][0]), __bfloat16_as_ushort(src[RV2::outer_dim - 1][0]), false, true);
+                    dst[RV1::outer_dim - 1][0] = __ushort_as_bfloat16(res.x);
+                }
+                else if constexpr (std::is_same_v<D2_1, half>) {
+                    uint2_t res = __builtin_amdgcn_permlane32_swap(__half_as_ushort(src[RV2::outer_dim - 1][0]), __half_as_ushort(src[RV2::outer_dim - 1][0]), false, true);
+                    dst[RV1::outer_dim - 1][0] = __ushort_as_half(res.x);
+                } else {
+                    static_assert(false, "Unsupported type");
+                }
             }
         }
         else if constexpr (std::is_same_v<typename RV1::layout, naive_l> && std::is_same_v<typename RV2::layout, ortho_l>) { // ortho -> naive layout
-            int lane_replication = laneid%4; // 0...3
+            const int hi_or_lo = laneid / 32;
             #pragma unroll
-            for(int i = 0; i < RV1::outer_dim; i++) {
-                D1 tmp = 0;
-                if(RV1::length%32==0 || i < RV1::outer_dim-1 || lane_replication<2) {
-                    tmp = lane_replication%2 ? src[2*i + (lane_replication>=2)][0].y : src[2*i + (lane_replication>=2)][0].x;
-                }
-                dst[i][0] = packed_shfl_sync(
-                    kittens::MASK_ALL, tmp,
-                    (laneid%8)*4 + (laneid/8)
-                );
+            for(int i = 0; i < RV2::outer_dim / 2; i++) {
+                dst[i][0] = src[i * 2 + hi_or_lo][0];
+            }
+
+            if constexpr (RV2::outer_dim % 2 == 1) {
+                dst[RV1::outer_dim - 1][0] = src[RV2::outer_dim - 1][0];
             }
         }
         else if constexpr (std::is_same_v<typename RV1::layout, align_l> && std::is_same_v<typename RV2::layout, naive_l>) { // naive -> align layout
+            const int lane_offset = 8 * (laneid / 32);
+            const int inner_lane = laneid % 32;
             #pragma unroll
-            for(int i = 0; i < RV1::outer_dim; i++) {
-                dst[i][0].x = packed_shfl_sync(
-                    kittens::MASK_ALL, src[i/2][0],
-                    16*(i%2) + 0 + 2*(laneid%4) + 0
-                );
-                dst[i][0].y = packed_shfl_sync(
-                    kittens::MASK_ALL, src[i/2][0],
-                    16*(i%2) + 0 + 2*(laneid%4) + 1
-                );
-                dst[i][1].x = packed_shfl_sync(
-                    kittens::MASK_ALL, src[i/2][0],
-                    16*(i%2) + 8 + 2*(laneid%4) + 0
-                );
-                dst[i][1].y = packed_shfl_sync(
-                    kittens::MASK_ALL, src[i/2][0],
-                    16*(i%2) + 8 + 2*(laneid%4) + 1
-                );
+            for(int i = 0; i < RV1::outer_dim / 2; i++) {
+                    
+                #pragma unroll
+                for(int j = 0; j < 32; j++) {
+                    const int inner_dim = (inner_lane ^ j);
+                    const int take = lane_offset + (inner_dim % 8) + 16 * (inner_dim / 8);
+                    const int outer_dim = i * 2 + (take / 32);
+                    const int x_or_y = take % 2;
+
+                    D2_1 val = __float2bfloat16(__shfl(__bfloat162float(src[i][0]), take));
+
+                    if (x_or_y) {
+                        dst[outer_dim][(inner_dim % 16) / 2].y = val;
+                    }
+                    else {
+                        dst[outer_dim][(inner_dim % 16) / 2].x = val;
+                    }
+                }
+            }
+
+            if constexpr (RV1::outer_dim % 2 == 1) {
+                #pragma unroll
+                for(int j = 0; j < 32; j++) {
+                    const int inner_dim = (inner_lane ^ j);
+                    const int take = lane_offset + (inner_dim % 8) + 16 * (inner_dim / 8);
+                    const int outer_dim = (RV1::outer_dim - 1) + (take / 32);
+                    const int x_or_y = take % 2;
+
+                    D2_1 val = __float2bfloat16(__shfl(__bfloat162float(src[RV2::outer_dim - 1][0]), take));
+
+                    if (outer_dim >= RV1::outer_dim) {
+                        continue;
+                    }
+
+                    if (x_or_y) {
+                        dst[outer_dim][(inner_dim % 16) / 2].y = val;
+                    }
+                    else {
+                        dst[outer_dim][(inner_dim % 16) / 2].x = val;
+                    }
+                }
             }
         }
         else if constexpr (std::is_same_v<typename RV1::layout, naive_l> && std::is_same_v<typename RV2::layout, align_l>) { // align -> naive layout
-            int lane_replication = laneid/8; // 0...3
+            const int give = (laneid % 32) / 2;
+            const int x_or_y = (laneid % 32) % 2;
+
+            const int give_inner_dim = give % 8;
+            const int give_outer_dim = give / 8;
+
+            const int take = (((laneid % 16) / 8) * 32) + ((laneid / 16) * 8) + (laneid % 8);
             #pragma unroll
             for(int i = 0; i < RV1::outer_dim; i++) {
-                D1 tmp = 0;
-                if(RV1::length%32==0 || i < RV1::outer_dim-1 || laneid<16) {
-                    tmp = (laneid%8)<4 ? src[2*i + (lane_replication>=2)][lane_replication%2].x : src[2*i + (lane_replication>=2)][lane_replication%2].y;
-                }
-                dst[i][0] = packed_shfl_sync(
-                    kittens::MASK_ALL, tmp,
-                    4*(laneid%2) + (laneid%8)/2 + (laneid&0b11000)
-                );
+                D2_1 val = x_or_y ? src[i * 2 + give_outer_dim][give_inner_dim].y : src[i * 2 + give_outer_dim][give_inner_dim].x;
+                dst[i][0] = __float2bfloat16(__shfl(__bfloat162float(val), take));
             }
         }
     }
 }
-
+#else
+template<ducks::rv::all RV1, ducks::rv::all RV2>
+__device__ static inline void copy(RV1 &dst, const RV2 &src) {
+    static_assert(RV1::length == RV2::length, "Register vectors must be the same length.");
+    using D1 = RV1::dtype;
+    using D2 = RV2::dtype;
+    static_assert(false, "This function is not implemented for CDNA3");
+}
+#endif
 } // namespace kittens
