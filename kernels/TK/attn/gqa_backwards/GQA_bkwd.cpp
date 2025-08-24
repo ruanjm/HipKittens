@@ -1,9 +1,9 @@
 #include "kittens.cuh"
 #include "pyutils/pyutils.cuh"
 
-constexpr int ATTN_B = 1; // batch size
-constexpr int ATTN_H = 1; // number of heads
-constexpr int ATTN_N = 32; // sequence length
+constexpr int ATTN_B = 16; // batch size
+constexpr int ATTN_H = 16; // number of heads
+constexpr int ATTN_N = 1024; // sequence length
 constexpr int ATTN_D = 128; // dimension
 constexpr int BLOCK_SIZE = 32; // block size
 
@@ -59,7 +59,6 @@ __global__ void attend_bwd_dq_ker(const attn_globals<D> g) {
     mul(tmp_float, dO_float, O_float); // (first TK kernel does this).
     attn_tile<D,float,row_l>::col_vec delta_vec;
     row_sum(delta_vec, tmp_float); 
-    one(delta_vec);
 
     int num_blocks = ATTN_N/BLOCK_SIZE;
     for (int j = 0; j < num_blocks; ++j) {
@@ -186,7 +185,6 @@ __global__ void attend_bwd_dkv_ker(const bwd_dkv_globals<D> g) {
         mul(tmp, dO_f, O_f);
         attn_tile<D,float,row_l>::col_vec delta_vec;
         row_sum(delta_vec, tmp);
-        one(delta_vec);
         
         // dS = P ⊙ (dO_i V_j^T − Delta)
         attn_tile<D,float,accum_col_l> dOVt; 
