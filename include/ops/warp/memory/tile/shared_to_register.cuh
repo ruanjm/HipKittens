@@ -55,7 +55,7 @@ __device__ inline static void load(RT &dst, const ST &src) {
             const int lane_byte_offset = (lane_row_offset * ST::underlying_tile_cols + lane_col_offset) * sizeof(U);
             const int swizzled_lane_byte_offset = lane_byte_offset ^ ((lane_byte_offset >> 9) << 5);
             const uint32_t addr = reinterpret_cast<uintptr_t>(&src.data[0]) + swizzled_lane_byte_offset;
-            printf("threadIdx.x: %d, addr: 0x%x, bank: %d\n", threadIdx.x, addr, (addr >> 2) & 0x3f);
+
             #pragma unroll
             for(int i = 0; i < dst.height; i++) {
         
@@ -77,11 +77,11 @@ __device__ inline static void load(RT &dst, const ST &src) {
             const int row_offset = (laneid % 16) / 4 + (laneid / 32) * 8;
             const int col_offset = ((laneid % 4) * 4) + 16*((laneid % 32)/16);
             const int lane_byte_offset = (row_offset * ST::underlying_tile_cols + col_offset) * sizeof(U);
-            const int swizzled_lane_byte_offset = lane_byte_offset ^ ((lane_byte_offset >> 8) << 4);
+            const int swizzled_lane_byte_offset = lane_byte_offset ^ ((lane_byte_offset >> 9) << 5);
 
             const int next_row_offset = row_offset + 4;
             const int next_lane_byte_offset = (next_row_offset * ST::underlying_tile_cols + col_offset) * sizeof(U);
-            const int swizzled_next_lane_byte_offset = next_lane_byte_offset ^ ((next_lane_byte_offset >> 8) << 4);
+            const int swizzled_next_lane_byte_offset = next_lane_byte_offset ^ ((next_lane_byte_offset >> 9) << 5);
 
             const uint32_t addr = reinterpret_cast<uintptr_t>(&src.data[0]) + swizzled_lane_byte_offset;
             const uint32_t next_addr = reinterpret_cast<uintptr_t>(&src.data[0]) + swizzled_next_lane_byte_offset;
