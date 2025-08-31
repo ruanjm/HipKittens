@@ -172,14 +172,7 @@ __global__ void attend_bwd_combined_ker(const attn_bwd_combined_globals<D> g) {
         exp(S_ij, S_ij);
         div_row(S_ij, S_ij, l_i);
 
-        // 12. dV_j += P_ij^T @ dO_i
-        attn_tile<D, bf16, accum_col_l, mfma_16x16x32> P_ij_bf16_acc_col;
-        copy(P_ij_bf16_acc_col, S_ij);
-        attn_tile<D, bf16, col_l, mfma_32x32x16> P_ij_bf16_col;
-        swap_layout(P_ij_bf16_col, P_ij_bf16_acc_col);
-        mma_AtB(dV_j, P_ij_bf16_col, dO_i, dV_j);
-
-        // // 13. dP_ij = dO_i @ V_j^T
+        // 13. dP_ij = dO_i @ V_j^T
         attn_tile<D, float, accum_col_l>dP_ij;
         zero(dP_ij);
         qo_tile<D, bf16, row_l, mfma_16x16x32> dO_i_row;
@@ -190,10 +183,23 @@ __global__ void attend_bwd_combined_ker(const attn_bwd_combined_globals<D> g) {
         sub_row(dP_ij, dP_ij, delta_i);
         mul(dP_ij, dP_ij, S_ij);
         mul(dP_ij, dP_ij, scale_factor);
-        store(g.dS_ij, dP_ij, {batch_idx,head_idx,i,j}); // TODO: replace with SMEM store
-        __builtin_amdgcn_s_waitcnt(0);
-        __builtin_amdgcn_sched_barrier(0);
-        __builtin_amdgcn_s_barrier();
+        attn_tile<D, bf16, accum_col_l>dP_ij_bf16;
+        copy(dP_ij_bf16, dP_ij);
+        store(g.dS_ij, dP_ij_bf16, {batch_idx,head_idx,i,j}); // TODO: replace with SMEM store
+
+        // 12. dV_j += P_ij^T @ dO_i
+        attn_tile<D, bf16, accum_col_l, mfma_16x16x32> P_ij_bf16_acc_col;
+        copy(P_ij_bf16_acc_col, S_ij);
+        attn_tile<D, bf16, col_l, mfma_32x32x16> P_ij_bf16_col;
+        swap_layout(P_ij_bf16_col, P_ij_bf16_acc_col);
+        mma_AtB(dV_j, P_ij_bf16_col, dO_i, dV_j);
+
+        // 16. dK_j += dS_ij^T @ Q_i   (128x64)=(128x16)x(16x64)
+        qo_tile<D, bf16, col_l, mfma_32x32x16> Q_i_col; // TODO: replace with SMEM load
+        load(Q_i_col, g.Q, {batch_idx, head_idx, i, 0});
+        attn_tile<D,bf16,col_l, mfma_32x32x16> dS_ij_bf16_col; // TODO: replace with SMEM load
+        swap_layout(dS_ij_bf16_col, dP_ij_bf16);
+        mma_AtB(dK_j, dS_ij_bf16_col, Q_i_col, dK_j);
 
         // 15. dQ_i += dS_ij @ K_j (32x16)=(32x256)x(256x16)
         qo_tile<D, float, accum_col_l> dQ_i;
@@ -202,24 +208,8 @@ __global__ void attend_bwd_combined_ker(const attn_bwd_combined_globals<D> g) {
         load(dS_ij_bf16_row, g.dS_ij, {batch_idx,head_idx,i,j});
         kv_tile<D, bf16, col_l> K_j_col;
         load(K_j_col, g.K, {batch_idx, head_idx, j, 0});  // TODO: replace with SMEM load
-        __builtin_amdgcn_s_waitcnt(0);
-        __builtin_amdgcn_sched_barrier(0);
-        __builtin_amdgcn_s_barrier();
         mma_AB(dQ_i, dS_ij_bf16_row, K_j_col, dQ_i);
         atomic_store<2>(g.dQg, dQ_i, {batch_idx,head_idx,i,0});
-        __builtin_amdgcn_s_waitcnt(0);
-        __builtin_amdgcn_sched_barrier(0);
-        __builtin_amdgcn_s_barrier();
-
-        // 16. dK_j += dS_ij^T @ Q_i   (128x64)=(128x16)x(16x64)
-        attn_tile<D,bf16,col_l, mfma_32x32x16> dS_ij_bf16_col; // TODO: replace with SMEM load
-        load(dS_ij_bf16_col, g.dS_ij, {batch_idx,head_idx,i,j});
-        qo_tile<D, bf16, col_l, mfma_32x32x16> Q_i_col; // TODO: replace with SMEM load
-        load(Q_i_col, g.Q, {batch_idx, head_idx, i, 0});
-        __builtin_amdgcn_s_waitcnt(0);
-        __builtin_amdgcn_sched_barrier(0);
-        __builtin_amdgcn_s_barrier();
-        mma_AtB(dK_j, dS_ij_bf16_col, Q_i_col, dK_j);
     }
 
     // 18. Write dK_j and dV_j back to HBM
