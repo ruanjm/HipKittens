@@ -1,8 +1,8 @@
 #include "kittens.cuh"
 #include "pyutils/pyutils.cuh"
 
-constexpr int ATTN_B = 1; // batch size
-constexpr int ATTN_H = 1; // number of heads
+constexpr int ATTN_B = 16; // batch size
+constexpr int ATTN_H = 16; // number of heads
 constexpr int ATTN_N = 1024; // sequence length
 constexpr int ATTN_D = 128; // dimension
 constexpr int BLOCK_SIZE_QO = 16; // block size for QO
@@ -61,7 +61,7 @@ void dispatch_prep(attn_prep_globals<D> g) {
 template<int D> struct attn_bwd_combined_globals { 
     gl<bf16, -1, -1, -1, -1> Q, K, V, O, dS_ij;
     gl<float, -1, -1, -1, -1> dOg, dQg, dKg, dVg;
-    gl<float, -1, -1, -1, -1> m_vec, l_vec, delta_vec;
+    gl<float, -1, -1, -1, -1> L_vec, delta_vec;
     dim3 grid() { return dim3(ATTN_B, ATTN_H, ATTN_N / BLOCK_SIZE_KV); }
     dim3 block() { return dim3(NUM_THREADS); }
     size_t dynamic_shared_memory() { return MAX_SHARED_MEMORY - 32000; }
@@ -154,11 +154,10 @@ __global__ void attend_bwd_combined_ker(const attn_bwd_combined_globals<D> g) {
         // 9. Load Q_i, O_i, dO_i, dQ_i, l_i, m_i, delta_i from HBM to registers
         qo_tile<D, bf16, row_l, mfma_16x16x32> Q_i;
         qo_tile<D, bf16, col_l, mfma_32x32x16> dO_i;
-        attn_tile<D, float, accum_col_l, mfma_16x16x32>::col_vec l_i, m_i, delta_i;
+        attn_tile<D, float, accum_col_l, mfma_16x16x32>::col_vec L_i, delta_i;
         load(Q_i, g.Q, {batch_idx, head_idx, i, 0});
         load(dO_i, g.dOg, {batch_idx, head_idx, i, 0});
-        load(l_i, g.l_vec, {batch_idx, head_idx, 0, i});
-        load(m_i, g.m_vec, {batch_idx, head_idx, 0, i});
+        load(L_i, g.L_vec, {batch_idx, head_idx, 0, i});
         load(delta_i, g.delta_vec, {batch_idx, head_idx, 0, i});
 
         // 10. S_ij = Q_i K_j^T * scale
@@ -167,10 +166,9 @@ __global__ void attend_bwd_combined_ker(const attn_bwd_combined_globals<D> g) {
         mma_ABt(S_ij, Q_i, K_j, S_ij);
         mul(S_ij, S_ij, scale_factor);
 
-        // 11. P_ij = exp(S_ij - m_i) / l_i
-        sub_row(S_ij, S_ij, m_i);
+        // 11. P_ij = exp(S_ij - L_i)
+        sub_row(S_ij, S_ij, L_i);
         exp(S_ij, S_ij);
-        div_row(S_ij, S_ij, l_i);
 
         // 13. dP_ij = dO_i @ V_j^T
         attn_tile<D, float, accum_col_l>dP_ij;
@@ -244,8 +242,7 @@ PYBIND11_MODULE(tk_kernel, m) {
         &attn_bwd_combined_globals<ATTN_D>::dQg,
         &attn_bwd_combined_globals<ATTN_D>::dKg,
         &attn_bwd_combined_globals<ATTN_D>::dVg,
-        &attn_bwd_combined_globals<ATTN_D>::m_vec, 
-        &attn_bwd_combined_globals<ATTN_D>::l_vec,
+        &attn_bwd_combined_globals<ATTN_D>::L_vec, 
         &attn_bwd_combined_globals<ATTN_D>::delta_vec
     );
 }
