@@ -60,13 +60,70 @@ void dispatch_prep(attn_prep_globals<D> g) {
 
 template<int D> struct attn_bwd_combined_globals { 
     gl<float, -1, -1, -1, -1> P, dOg_out;
-    gl<bf16, -1, -1, -1, -1> Q, K, V, O;
+    gl<bf16, -1, -1, -1, -1> Q, K, V, O, dS_ij;
     gl<float, -1, -1, -1, -1> dOg, dQg, dKg, dVg;
     gl<float, -1, -1, -1, -1> m_vec, l_vec, delta_vec;
     dim3 grid() { return dim3(ATTN_B, ATTN_H, ATTN_N / BLOCK_SIZE_KV); }
     dim3 block() { return dim3(NUM_THREADS); }
     size_t dynamic_shared_memory() { return MAX_SHARED_MEMORY - 32000; }
 };
+
+template<int axis, ducks::rt::accumulator_col_layout RT, ducks::gl::all GL, ducks::coord::tile COORD=coord<RT>>
+__device__ inline static void atomic_store(const GL &dst, const RT &src, const COORD &idx) { 
+    using T = base_types::packing<typename RT::dtype>::unpacked_type;
+    using U = typename GL::dtype;
+
+    U *dst_ptr = (U*)&dst[(idx.template unit_coord<axis, 3>())];
+    const int row_stride = dst.template stride<axis>();
+    int laneid = kittens::laneid();
+
+    const uint32_t buffer_size = row_stride * RT::rows * sizeof(U); 
+    std::uintptr_t as_int = reinterpret_cast<std::uintptr_t>(dst_ptr);
+    std::uint64_t  as_u64 = static_cast<std::uint64_t>(as_int);
+    buffer_resource br = make_buffer_resource(as_u64, buffer_size, 0x00020000);
+
+    int col_offset = laneid%(src.tile_size_col);
+    int row_offset = laneid/(src.tile_size_col);
+
+    #pragma unroll
+    for(int i = 0; i < src.height; i++) {
+        #pragma unroll
+        for(int j = 0; j < src.width; j++) {
+            int col = src.tile_size_col*j + col_offset;
+            int row = src.tile_size_row*i + row_offset * 4;
+            const U val_0 = base_types::convertor<U, T>::convert(src.tiles[i][j].data[0].x);
+            const U val_1 = base_types::convertor<U, T>::convert(src.tiles[i][j].data[0].y);
+            const U val_2 = base_types::convertor<U, T>::convert(src.tiles[i][j].data[1].x);
+            const U val_3 = base_types::convertor<U, T>::convert(src.tiles[i][j].data[1].y);
+
+            uint32_t byte_offset_0 = static_cast<uint32_t>(((row + 0) * row_stride + col) * sizeof(U));
+            uint32_t byte_offset_1 = static_cast<uint32_t>(((row + 1) * row_stride + col) * sizeof(U));
+            uint32_t byte_offset_2 = static_cast<uint32_t>(((row + 2) * row_stride + col) * sizeof(U));
+            uint32_t byte_offset_3 = static_cast<uint32_t>(((row + 3) * row_stride + col) * sizeof(U));
+
+            uint32_t val_0_bits = *reinterpret_cast<const uint32_t*>(&val_0);
+            uint32_t val_1_bits = *reinterpret_cast<const uint32_t*>(&val_1);
+            uint32_t val_2_bits = *reinterpret_cast<const uint32_t*>(&val_2);
+            uint32_t val_3_bits = *reinterpret_cast<const uint32_t*>(&val_3);
+
+            asm volatile(
+                "buffer_atomic_add_f32 %0, %1, %8, 0 offen\n"
+                "buffer_atomic_add_f32 %2, %3, %8, 0 offen\n"
+                "buffer_atomic_add_f32 %4, %5, %8, 0 offen\n"
+                "buffer_atomic_add_f32 %6, %7, %8, 0 offen\n"
+                "s_waitcnt vmcnt(0)\n"
+                :
+                : "v"(val_0_bits), "v"(byte_offset_0),      // %0, %1
+                  "v"(val_1_bits), "v"(byte_offset_1),      // %2, %3
+                  "v"(val_2_bits), "v"(byte_offset_2),      // %4, %5
+                  "v"(val_3_bits), "v"(byte_offset_3),      // %6, %7
+                  "s"(*(i32x4*)&br)                         // %8
+                : "memory"
+            );
+        }
+    }
+}
+
 
 template<int D> __launch_bounds__(NUM_THREADS, 1)
 __global__ void attend_bwd_combined_ker(const attn_bwd_combined_globals<D> g) {
@@ -84,8 +141,9 @@ __global__ void attend_bwd_combined_ker(const attn_bwd_combined_globals<D> g) {
     kv_tile<D, float, accum_col_l, mfma_32x32x16> dK_j, dV_j;
 
     // 6. Load K_j and V_j from HBM to registers
-    load(K_j, g.K, {batch_idx, head_idx, seq_idx * NUM_WARPS + warpid, 0});
-    load(V_j, g.V, {batch_idx, head_idx, seq_idx * NUM_WARPS + warpid, 0});
+    const int j = seq_idx * NUM_WARPS + warpid;
+    load(K_j, g.K, {batch_idx, head_idx, j, 0});
+    load(V_j, g.V, {batch_idx, head_idx, j, 0});
     
     // 7. Initialize dK_j = 0 and dV_j = 0
     zero(dK_j);
@@ -125,31 +183,53 @@ __global__ void attend_bwd_combined_ker(const attn_bwd_combined_globals<D> g) {
         store(g.dOg_out, dO_i, {batch_idx, head_idx, i, 0});
 
         // // 13. dP_ij = dO_i @ V_j^T
-        // attn_tile<D,float,accum_col_l> dP_ij;
-        // zero(dP_ij);
-        // qkvo_tile<D,bf16,row_l> dO_i_bf16_row = swap_layout_inplace<row_l>(dO_i);
-        // mma_ABt(dP_ij, dO_i_bf16_row, V_j, dP_ij);
+        attn_tile<D, float, accum_col_l>dP_ij;
+        zero(dP_ij);
+        qo_tile<D, bf16, row_l, mfma_16x16x32> dO_i_row;
+        load(dO_i_row, g.dOg, {batch_idx, head_idx, i, 0}); // TODO: replace with SMEM load
+        mma_ABt(dP_ij, dO_i_row, V_j, dP_ij);
 
-        // // 14. dS_ij = P_ij o (dP_ij - delta_i)
-        // sub_row(dP_ij, dP_ij, delta_i);
-        // mul(dP_ij, dP_ij, S_ij);
-        // mul(dP_ij, dP_ij, scale_factor);
+        // 14. dS_ij = P_ij o (dP_ij - delta_i)
+        sub_row(dP_ij, dP_ij, delta_i);
+        mul(dP_ij, dP_ij, S_ij);
+        mul(dP_ij, dP_ij, scale_factor);
+        store(g.dS_ij, dP_ij, {batch_idx,head_idx,i,j}); // TODO: replace with SMEM store
+        __builtin_amdgcn_s_waitcnt(0);
+        __builtin_amdgcn_sched_barrier(0);
+        __builtin_amdgcn_s_barrier();
 
-        // // 15. dQ_i += dS_ij @ K_j (load from HBM and write back)
-        // qkvo_tile<D, float, accum_col_l> dQ_i;
-        // load(dQ_i, g.dQg, {b,h,i,0});
-        // attn_tile<D, bf16, accum_col_l> dS_ij_bf16_acc_col;
-        // copy(dS_ij_bf16_acc_col, dP_ij);
-        // attn_tile<D, bf16, row_l> dS_ij_bf16_row = swap_layout_inplace<row_l>(dS_ij_bf16_acc_col);
-        // qkvo_tile<D, bf16, col_l> K_j_col;
-        // swap_layout(K_j_col, K_j);
-        // mma_AB(dQ_i, dS_ij_bf16_row, K_j_col, dQ_i);
-        // store(g.dQg, dQ_i, {b,h,i,0});
+        // 15. dQ_i += dS_ij @ K_j (32x16)=(32x256)x(256x16)
+        qo_tile<D, float, accum_col_l> dQ_i;
+        zero(dQ_i);
+        // load(dQ_i, g.dQg, {batch_idx,head_idx,i,0});
+        __builtin_amdgcn_s_waitcnt(0);
+        __builtin_amdgcn_sched_barrier(0);
+        __builtin_amdgcn_s_barrier();
+        attn_tile<D, bf16, row_l> dS_ij_bf16_row;  
+        load(dS_ij_bf16_row, g.dS_ij, {batch_idx,head_idx,i,j});
+        __builtin_amdgcn_s_waitcnt(0);
+        __builtin_amdgcn_sched_barrier(0);
+        __builtin_amdgcn_s_barrier();
+        kv_tile<D, bf16, col_l> K_j_col;
+        load(K_j_col, g.K, {batch_idx, head_idx, j, 0});  // TODO: replace with SMEM load
+        __builtin_amdgcn_s_waitcnt(0);
+        __builtin_amdgcn_sched_barrier(0);
+        __builtin_amdgcn_s_barrier();
+        mma_AB(dQ_i, dS_ij_bf16_row, K_j_col, dQ_i);
+        atomic_store<2>(g.dQg, dQ_i, {batch_idx,head_idx,i,0});
+        __builtin_amdgcn_s_waitcnt(0);
+        __builtin_amdgcn_sched_barrier(0);
+        __builtin_amdgcn_s_barrier();
 
-        // // 16. dK_j += dS_ij^T @ Q_i
-        // attn_tile<D,bf16,col_l> dS_ij_bf16_col = swap_layout_inplace<col_l>(dS_ij_bf16_row);
-        // qkvo_tile<D, bf16, col_l> Q_i_col = swap_layout_inplace<col_l>(Q_i);
-        // mma_AtB(dK_j, dS_ij_bf16_col, Q_i_col, dK_j);
+        // 16. dK_j += dS_ij^T @ Q_i   (128x64)=(128x16)x(16x64)
+        attn_tile<D,bf16,col_l, mfma_32x32x16> dS_ij_bf16_col; // TODO: replace with SMEM load
+        load(dS_ij_bf16_col, g.dS_ij, {batch_idx,head_idx,i,j});
+        qo_tile<D, bf16, col_l, mfma_32x32x16> Q_i_col; // TODO: replace with SMEM load
+        load(Q_i_col, g.Q, {batch_idx, head_idx, i, 0});
+        __builtin_amdgcn_s_waitcnt(0);
+        __builtin_amdgcn_sched_barrier(0);
+        __builtin_amdgcn_s_barrier();
+        mma_AtB(dK_j, dS_ij_bf16_col, Q_i_col, dK_j);
     }
 
     // 18. Write dK_j and dV_j back to HBM
@@ -181,6 +261,7 @@ PYBIND11_MODULE(tk_kernel, m) {
         &attn_bwd_combined_globals<ATTN_D>::K, 
         &attn_bwd_combined_globals<ATTN_D>::V, 
         &attn_bwd_combined_globals<ATTN_D>::O, 
+        &attn_bwd_combined_globals<ATTN_D>::dS_ij,
         &attn_bwd_combined_globals<ATTN_D>::dOg, 
         &attn_bwd_combined_globals<ATTN_D>::dQg,
         &attn_bwd_combined_globals<ATTN_D>::dKg,

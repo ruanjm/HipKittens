@@ -134,6 +134,25 @@ dO_tk = dO_bhnd.float().clone()
 m_tk = m_tiled.float().unsqueeze(-1)
 l_tk = l_tiled.float().unsqueeze(-1)
 
+def test_dq(Q, K, V, dO, m, l):
+    """Simple version that should match PyTorch exactly"""
+    D = Q.shape[-1]
+    scale = 1.0 / math.sqrt(D)
+    # Recompute scores and probabilities with saved m, l
+    S = torch.matmul(Q, K.transpose(-2, -1)) * scale
+    P = torch.exp(S - m) / l
+    O = torch.matmul(P.float(), V.float())
+    # # softmax backward
+    Delta = (dO * O).sum(dim=-1, keepdim=True)             
+    dS = (torch.matmul(dO.float(), V.transpose(-2, -1).float()) - Delta) * P.float()  * scale  # (B, N, H, N)
+    # chain rule through S = (Q K^T) * scale
+    dQ = torch.matmul(torch.ones_like(dS.float()), K.float())
+    dV = torch.matmul(P.float().transpose(-2, -1), dO)
+    return P
+
+dS_test = test_dq(Q_tk.clone(), K_tk.clone(), V_tk.clone(), dO_tk.clone(), m_tk.clone(), l_tk.clone())
+dS_ij_tk = torch.zeros_like(dS_test.bfloat16().clone())
+
 # TK
 print("Running ThunderKittens ...")
 P_tk = torch.zeros_like(P_tiled).float()
@@ -155,7 +174,8 @@ tk_kernel.dispatch_bwd_combined(
     Q_tk,     
     K_tk,     
     V_tk,     
-    O_tk,     
+    O_tk,   
+    dS_ij_tk,
     dO_tk,    
     dQ_tk,   
     dK_tk,    
