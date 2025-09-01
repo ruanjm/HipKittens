@@ -5,6 +5,7 @@ using namespace kittens;
 constexpr int BLOCK_SIZE = 64;
 constexpr int M_BLOCK = 2;
 constexpr int N_BLOCK = 4;
+constexpr int DOT_SLICE = 32;
 
 constexpr int NEW_ROW_BLOCK_SIZE = BLOCK_SIZE * M_BLOCK;
 constexpr int NEW_COL_BLOCK_SIZE = BLOCK_SIZE * N_BLOCK;
@@ -12,8 +13,11 @@ constexpr int NEW_COL_BLOCK_SIZE = BLOCK_SIZE * N_BLOCK;
 #define NUM_PRODUCER_WORKERS (4)
 #define NUM_CONSUMER_WORKERS (M_BLOCK * 4)
 #define NUM_THREADS ((NUM_PRODUCER_WORKERS + NUM_CONSUMER_WORKERS) * kittens::WARP_THREADS)
+#define NUM_PRODUCER_THREADS (NUM_PRODUCER_WORKERS * kittens::WARP_THREADS)
 
 using G = kittens::group<NUM_PRODUCER_WORKERS>;
+using A_slice = rt_bf<BLOCK_SIZE, DOT_SLICE, row_l>;
+using B_slice = rt_bf<BLOCK_SIZE, DOT_SLICE, row_l>;
 
 #define M 8192
 #define K 8192
@@ -42,20 +46,33 @@ void micro_tk(const micro_globals g) {
     int col = blockIdx.x * N_BLOCK;
 
     int warp_id = kittens::warpid();
-    int local_warp_id = warp_id % 4;
+    const int local_warp_id = warp_id % 4;
     int warp_group_id = kittens::warpgroupid();
     bool is_producer = (warp_group_id == 0);
     bool is_consumer = (warp_group_id > 0 && warp_group_id <= M_BLOCK);
     int consumer_idx = is_consumer ? warp_group_id - 1 : 0;
+
+    using T = typename st_bf<BLOCK_SIZE, BLOCK_SIZE>::dtype;
+    constexpr int bytes_per_thread = 16;
+    constexpr int bytes_per_memcpy = bytes_per_thread * NUM_PRODUCER_THREADS;
+    constexpr int memcpy_per_tile = BLOCK_SIZE * BLOCK_SIZE * sizeof(T) / bytes_per_memcpy;
+    uint32_t swizzled_offsets_A[memcpy_per_tile];
+    uint32_t swizzled_offsets_B[memcpy_per_tile];
+    G::prefill_swizzled_offsets(As[0][0], g.a, swizzled_offsets_A);
+    G::prefill_swizzled_offsets(Bs[0][0], g.b, swizzled_offsets_B);
     
     int s = 0, n1 = 1, n2 = 2;
     if (is_producer) {
         // preload tile 0 into stage s
-        for (int m=0; m<M_BLOCK; ++m) G::load<2,false>(As[s][m],  g.a, {0,0, row+m, 0});
-        for (int n=0; n<N_BLOCK; ++n) G::load<2,false>(Bs[s][n],  g.b, {0,0, col+n, 0});
+        #pragma unroll
+        for (int m=0; m<M_BLOCK; ++m) G::load<2,false>(As[s][m],  g.a, {0,0, row+m, 0}, swizzled_offsets_A);
+        #pragma unroll
+        for (int n=0; n<N_BLOCK; ++n) G::load<2,false>(Bs[s][n],  g.b, {0,0, col+n, 0}, swizzled_offsets_B);
         // preload tile 1 into stage n1
-        for (int m=0; m<M_BLOCK; ++m) G::load<2,false>(As[n1][m], g.a, {0,0, row+m, 1});
-        for (int n=0; n<N_BLOCK; ++n) G::load<2,false>(Bs[n1][n], g.b, {0,0, col+n, 1});
+        #pragma unroll
+        for (int m=0; m<M_BLOCK; ++m) G::load<2,false>(As[n1][m], g.a, {0,0, row+m, 1}, swizzled_offsets_A);
+        #pragma unroll
+        for (int n=0; n<N_BLOCK; ++n) G::load<2,false>(Bs[n1][n], g.b, {0,0, col+n, 1}, swizzled_offsets_B);
         __builtin_amdgcn_s_waitcnt(0);
     }
     __syncthreads();
@@ -63,22 +80,36 @@ void micro_tk(const micro_globals g) {
 
     if (is_consumer) {zero(C_accum);}
     const int num_tiles = K / BLOCK_SIZE;
-    for (int tile = 0; tile < num_tiles; ++tile) {
+
+    #pragma unroll
+    for (int tile = 0; tile < num_tiles-2; ++tile) {
 
         // producers: prefetch tile+2 into n2
-        if (is_producer && (tile + 2) < num_tiles) {
-            for (int m=0; m<M_BLOCK; ++m) G::load<2,false>(As[n2][m], g.a, {0,0, row+m, tile+2});
-            for (int n=0; n<N_BLOCK; ++n) G::load<2,false>(Bs[n2][n], g.b, {0,0, col+n, tile+2});
-            __builtin_amdgcn_s_waitcnt(0);
+        if (is_producer) {
+            #pragma unroll
+            for (int m=0; m<M_BLOCK; ++m) G::load<2,false>(As[n2][m], g.a, {0,0, row+m, tile+2}, swizzled_offsets_A);
+            #pragma unroll
+            for (int n=0; n<N_BLOCK; ++n) G::load<2,false>(Bs[n2][n], g.b, {0,0, col+n, tile+2}, swizzled_offsets_B);
+            // __builtin_amdgcn_s_waitcnt(0);
         }
         // consumers: compute from current stage s
         else if (is_consumer) {
-            rt_bf<BLOCK_SIZE,BLOCK_SIZE,row_l> a_reg, b_reg;
-            load(a_reg, As[s][consumer_idx]);
-            load(b_reg, Bs[s][local_warp_id]);
+            A_slice a0;
+            B_slice b0;
+
+            // Issue both LDS->VGPR reads first to create a little ILP
+            load(a0, subtile_inplace<BLOCK_SIZE, DOT_SLICE>(As[s][consumer_idx], {0,0}));
+            load(b0, subtile_inplace<BLOCK_SIZE, DOT_SLICE>(Bs[s][local_warp_id], {0,0}));
             asm volatile("s_waitcnt lgkmcnt(0)");
             __builtin_amdgcn_s_setprio(1);
-            mma_ABt(C_accum, a_reg, b_reg, C_accum);
+            mma_ABt(C_accum, a0, b0, C_accum);
+            __builtin_amdgcn_s_setprio(0);
+
+            load(a0, subtile_inplace<BLOCK_SIZE, DOT_SLICE>(As[s][consumer_idx], {0,1}));
+            load(b0, subtile_inplace<BLOCK_SIZE, DOT_SLICE>(Bs[s][local_warp_id], {0,1}));
+            asm volatile("s_waitcnt lgkmcnt(0)");
+            __builtin_amdgcn_s_setprio(1);
+            mma_ABt(C_accum, a0, b0, C_accum);
             __builtin_amdgcn_s_setprio(0);
         }
         __syncthreads();
@@ -86,6 +117,24 @@ void micro_tk(const micro_globals g) {
         int tmp = s;
         s = n1; n1 = n2; n2 = tmp;
     }
+
+    {
+        rt_bf<BLOCK_SIZE,BLOCK_SIZE,row_l> a_reg, b_reg;
+        load(a_reg, As[s][consumer_idx]);
+        load(b_reg, Bs[s][local_warp_id]);
+        asm volatile("s_waitcnt lgkmcnt(0)");
+        __builtin_amdgcn_s_setprio(1);
+        mma_ABt(C_accum, a_reg, b_reg, C_accum);
+        __builtin_amdgcn_s_setprio(0);
+
+        load(a_reg, As[n1][consumer_idx]);
+        load(b_reg, Bs[n1][local_warp_id]);
+        asm volatile("s_waitcnt lgkmcnt(0)");
+        __builtin_amdgcn_s_setprio(1);
+        mma_ABt(C_accum, a_reg, b_reg, C_accum);
+        __builtin_amdgcn_s_setprio(0);
+    }
+
     if (is_consumer) {
         store(g.c, C_accum, {0, 0, row + consumer_idx, col + local_warp_id});
     }
@@ -102,7 +151,7 @@ void dispatch_micro(micro_globals g) {
     hipEventSynchronize(stop);
     float ms=0.f; hipEventElapsedTime(&ms, start, stop);
     hipEventDestroy(start); hipEventDestroy(stop);
-    printf("kernel_ms=%.3f\n", ms);
+    // printf("kernel_ms=%.3f\n", ms);
     hipDeviceSynchronize();
   }
 
