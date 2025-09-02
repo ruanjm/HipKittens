@@ -19,19 +19,23 @@ using G = kittens::group<NUM_PRODUCER_WORKERS>;
 using A_slice = rt_bf<BLOCK_SIZE, DOT_SLICE, row_l>;
 using B_slice = rt_bf<BLOCK_SIZE, DOT_SLICE, row_l>;
 
-#define M 7680
-#define K 7680
-#define N 7680
+#define M 192*40
+#define K 192*40
+#define N 192*40
+
+__host__ __device__ inline int ceil_div(int a, int b) {
+    return (a + b - 1) / b;
+  }
 
 struct micro_globals {
     gl<bf16, -1, -1, -1, -1> a, b;
     gl<bf16, -1, -1, -1, -1> c;
     dim3 grid()  { return dim3(N / NEW_COL_BLOCK_SIZE, M / NEW_ROW_BLOCK_SIZE); } 
     dim3 block() { return dim3(NUM_THREADS); } 
-    size_t dynamic_shared_memory() { return (MAX_SHARED_MEMORY-4096); }
+    size_t dynamic_shared_memory() { return (120000); }
 };
 
-__global__ __launch_bounds__(NUM_THREADS, 2)
+__global__ __launch_bounds__(NUM_THREADS, 1)
 void micro_tk(const micro_globals g) {
 
     // shared memory
@@ -41,9 +45,24 @@ void micro_tk(const micro_globals g) {
     st_bf<BLOCK_SIZE, BLOCK_SIZE, ducks::st_layout::row> (&Bs)[2][N_BLOCK] = al.allocate<st_bf<BLOCK_SIZE, BLOCK_SIZE, ducks::st_layout::row>, 2, N_BLOCK>();
     rt_fl<BLOCK_SIZE, BLOCK_SIZE, accum_col_l> C_accum;
 
-    int row = blockIdx.y * M_BLOCK;
-    int col = blockIdx.x * N_BLOCK;
+    // L2 cache rate
+    int wgid = (blockIdx.y * gridDim.x) + blockIdx.x;
+    const int NUM_WGS  = gridDim.x * gridDim.y;
+    const int NUM_XCDS = 8;  
+    wgid = (wgid % NUM_XCDS) * (NUM_WGS / NUM_XCDS) + (wgid / NUM_XCDS);
+    const int WGM = 4;  
+    const int num_pid_m = ceil_div(M, NEW_ROW_BLOCK_SIZE); // 7680 / 192 = 40
+    const int num_pid_n = ceil_div(N, NEW_COL_BLOCK_SIZE); // 7680 / 256 = 30
+    const int num_wgid_in_group = WGM * num_pid_n;
+    const int group_id     = wgid / num_wgid_in_group;
+    const int first_pid_m  = group_id * WGM;
+    const int group_size_m = min(num_pid_m - first_pid_m, WGM);
+    const int pid_m = first_pid_m + ((wgid % num_wgid_in_group) % group_size_m);
+    const int pid_n = (wgid % num_wgid_in_group) / group_size_m;
+    int row = pid_m * M_BLOCK;  
+    int col = pid_n * N_BLOCK;  
 
+    // producer and consumer
     int warp_id = kittens::warpid();
     int local_warp_id = warp_id % 4;
     int warp_group_id = kittens::warpgroupid();
@@ -51,6 +70,7 @@ void micro_tk(const micro_globals g) {
     bool is_consumer = (warp_group_id > 0 && warp_group_id <= M_BLOCK);
     int consumer_idx = is_consumer ? warp_group_id - 1 : 0;
 
+    // preswizzled offsets
     using T = typename st_bf<BLOCK_SIZE, BLOCK_SIZE>::dtype;
     constexpr int bytes_per_thread = 16;
     constexpr int bytes_per_memcpy = bytes_per_thread * NUM_PRODUCER_THREADS;
@@ -60,20 +80,24 @@ void micro_tk(const micro_globals g) {
     G::prefill_swizzled_offsets(As[0][0], g.a, swizzled_offsets_A);
     G::prefill_swizzled_offsets(Bs[0][0], g.b, swizzled_offsets_B);
     
+    // preload
     int tic = 0;
     int toc = 1;
     if (is_producer) {
+        #pragma unroll
         for (int m = 0; m < M_BLOCK; m++) {
             G::load<2, false>(As[tic][m], g.a, {0, 0, row + m, 0}, swizzled_offsets_A);
         }
+        #pragma unroll
         for (int n = 0; n < N_BLOCK; n++) {
             G::load<2, false>(Bs[tic][n], g.b, {0, 0, col + n, 0}, swizzled_offsets_B);
         }
-        __builtin_amdgcn_s_waitcnt(0);
+        asm volatile("s_waitcnt vmcnt(0)");
     }
     __syncthreads();
 
 
+    // hot loop
     if (is_consumer) {zero(C_accum);}
     int num_tiles = K / BLOCK_SIZE;
     #pragma unroll
@@ -83,12 +107,11 @@ void micro_tk(const micro_globals g) {
             #pragma unroll
             for (int m = 0; m < M_BLOCK; m++) {
                 G::load<2, false>(As[toc][m], g.a, {0, 0, row + m, tile + 1}, swizzled_offsets_A);
-        }
+            }
             #pragma unroll
             for (int n = 0; n < N_BLOCK; n++) {
                 G::load<2, false>(Bs[toc][n], g.b, {0, 0, col + n,tile + 1}, swizzled_offsets_B);
             }
-            __builtin_amdgcn_s_waitcnt(0);
         } else if (is_consumer) {
             A_slice a0, a1;
             B_slice b0, b1;
@@ -107,6 +130,9 @@ void micro_tk(const micro_globals g) {
             mma_ABt(C_accum, a1, b1, C_accum);
             __builtin_amdgcn_s_setprio(0);
         }
+        __builtin_amdgcn_s_setprio(1);
+        asm volatile("s_waitcnt vmcnt(0)");
+        asm volatile("s_waitcnt lgkmcnt(0)");
         __builtin_amdgcn_sched_barrier(0);
         __builtin_amdgcn_s_barrier();
 
