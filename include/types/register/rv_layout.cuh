@@ -21,7 +21,7 @@ namespace rv_layout {
  */
 #ifdef KITTENS_CDNA4
 struct align       { constexpr static int inner_dim = 8; };
-struct accum_align { constexpr static int inner_dim = 2; };
+struct accum_align { constexpr static int inner_dim = 1; };
 #else
 struct align { constexpr static int inner_dim = 2; };
 #endif

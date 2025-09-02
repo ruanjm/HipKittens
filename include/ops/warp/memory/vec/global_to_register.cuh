@@ -47,14 +47,14 @@ __device__ inline static void load(RV &dst, const GL &src, const COORD &idx) {
     else if constexpr (std::is_same_v<typename RV::layout, accum_align_l>) {
         #pragma unroll
         for(auto w = 0; w < dst.outer_dim; w++) {
-            int idx = w*16 + 4*(laneid/16);
-            // this should be a maximally coalesced load.
-            #pragma unroll
-            for(int i = 0; i < 2; i++) {
-                dst[w][i] = base_types::convertor<T2, U2>::convert(*(U2*)&src_ptr[idx + i * 2]);
-            }
-            // int idx = w*16 + 4*(laneid/16) + laneid%4;
-            // dst[w][0] = base_types::convertor<T, U>::convert(src_ptr[idx]);
+            // int idx = w*16 + 4*(laneid/16);
+            // // this should be a maximally coalesced load.
+            // #pragma unroll
+            // for(int i = 0; i < 2; i++) {
+            //     dst[w][i] = base_types::convertor<T2, U2>::convert(*(U2*)&src_ptr[idx + i * 2]);
+            // }
+            int idx = w*16 + 4*(laneid/16) + laneid%4;
+            dst[w][0] = base_types::convertor<T, U>::convert(src_ptr[idx]);
         }
     }
     else if constexpr (std::is_same_v<typename RV::layout, ortho_l>) {

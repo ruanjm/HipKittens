@@ -54,8 +54,8 @@ struct rv {
     static constexpr bool is_ortho = std::is_same_v<layout, ducks::rv_layout::ortho>;
     using T = kittens::base_types::packing<_T>::unpacked_type;
     using T2 = kittens::base_types::packing<_T>::packed_type;
-    using dtype = std::conditional_t<is_naive || is_ortho, T, T2>; ///< Data type of the matrix elements
-    // using dtype = T; ///< Data type of the matrix elements
+    // using dtype = std::conditional_t<is_naive || is_ortho, T, T2>; ///< Data type of the matrix elements
+    using dtype = T; ///< Data type of the matrix elements
 
     static constexpr int length = _length; ///< Length in elements.
     static_assert(length % _tile_length == 0, "Length must be divisible by the tile dimension");
