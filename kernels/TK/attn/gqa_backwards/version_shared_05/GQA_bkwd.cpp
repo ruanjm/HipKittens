@@ -22,6 +22,7 @@ template<int D, typename T=bf16, typename L=row_l, typename M=mfma_16x16x32> usi
 template<int D, typename T=bf16, typename L=row_l, typename M=mfma_16x16x32> using qo_tile_T = rt<T, D, WARP_SIZE_QO, L, M>;
 template<int D, typename T=bf16, typename L=row_l, typename M=mfma_16x16x32> using kv_tile_T = rt<T, D, WARP_SIZE_KV, L, M>;
 template<int D, typename T=float, typename L=accum_col_l, typename M=mfma_16x16x32> using attn_tile = rt<T, WARP_SIZE_QO, WARP_SIZE_KV, L, M>;
+template<int D, typename T=bf16, typename L=col_l, typename M=mfma_16x16x32> using attn_tile_T = rt<T, WARP_SIZE_KV, WARP_SIZE_QO, L, M>;
 
 template<int D> struct attn_prep_globals { 
     gl<bf16, -1, -1, -1, -1> Og;
@@ -29,7 +30,7 @@ template<int D> struct attn_prep_globals {
     gl<float, -1, -1, -1, -1> delta;
     dim3 grid() { return dim3(ATTN_B, ATTN_H, ATTN_N / (WARP_SIZE_QO * NUM_WARPS)); }
     dim3 block() { return dim3(NUM_THREADS); }
-    size_t dynamic_shared_memory() { return MAX_SHARED_MEMORY - 32000; }
+    size_t dynamic_shared_memory() { return MAX_SHARED_MEMORY; }
 };
 
 template<int D> __launch_bounds__(NUM_THREADS, 1)
@@ -70,7 +71,7 @@ template<int D> struct attn_bwd_combined_globals {
     gl<float, -1, -1, -1, -1> L_vec, delta_vec;
     dim3 grid() { return dim3(ATTN_B, ATTN_H, ATTN_N / BLOCK_SIZE_KV); }
     dim3 block() { return dim3(NUM_THREADS); }
-    size_t dynamic_shared_memory() { return MAX_SHARED_MEMORY - 32000; }
+    size_t dynamic_shared_memory() { return MAX_SHARED_MEMORY; }
 };
 
 template<int axis, ducks::rt::accumulator_col_layout RT, ducks::gl::all GL, ducks::coord::tile COORD=coord<RT>>
@@ -215,36 +216,40 @@ __global__ void attend_bwd_combined_ker(const attn_bwd_combined_globals<D> g) {
     const float scale_factor = 1.0f / sqrt(D);
 
     // Shared tiles
-    // extern __shared__ alignment_dummy __shm[];
-    // shared_allocator al((int*)&__shm[0]);
-    // st_bf<BLOCK_SIZE_KV, D, ducks::st_matrix::mfma_16x16x32> K_j_smem = al.allocate<st_bf<BLOCK_SIZE_KV, D, ducks::st_matrix::mfma_16x16x32>>();
-    // G::load(K_j_smem, g.K, {batch_idx, head_idx, seq_idx, 0});
-    // __builtin_amdgcn_s_waitcnt(0);
-    // __builtin_amdgcn_s_barrier();
-    // __builtin_amdgcn_sched_barrier(0);
+    extern __shared__ alignment_dummy __shm[];
+    shared_allocator al((int*)&__shm[0]);
+    st_bf<BLOCK_SIZE_KV, D, ducks::st_matrix::mfma_16x16x32> (&K_j_smem) = al.allocate<st_bf<BLOCK_SIZE_KV, D, ducks::st_matrix::mfma_16x16x32>>();
+    st_bf<BLOCK_SIZE_QO, D, ducks::st_matrix::mfma_16x16x32> (&Q_i_smem) = al.allocate<st_bf<BLOCK_SIZE_QO, D, ducks::st_matrix::mfma_16x16x32>>();
+    st_bf<BLOCK_SIZE_QO, D, ducks::st_matrix::mfma_16x16x32> (&dO_i_smem) = al.allocate<st_bf<BLOCK_SIZE_QO, D, ducks::st_matrix::mfma_16x16x32>>();
+    // We parameterize this using mfma_32x32x16 because we want the base tile for it to be 32x16. Not that it uses that intrinsic.
+    st_bf<BLOCK_SIZE_KV, BLOCK_SIZE_QO, ducks::st_matrix::mfma_32x32x16> (&attn_i_smem) = al.allocate<st_bf<BLOCK_SIZE_KV, BLOCK_SIZE_QO, ducks::st_matrix::mfma_32x32x16>>();
+    G::load(K_j_smem, g.K, {batch_idx, head_idx, seq_idx, 0});
+    __builtin_amdgcn_s_waitcnt(0);
+    __builtin_amdgcn_s_barrier();
+    __builtin_amdgcn_sched_barrier(0);
 
     // Register tiles
     kv_tile<D, bf16, row_l, mfma_16x16x32> K_j, V_j;
+    kv_tile<D, bf16, col_l> K_j_col;
     qo_tile_T<D, float, accum_col_l> dQ_i_T;
     kv_tile_T<D, float, accum_col_l, mfma_32x32x16> dK_j_T, dV_j_T;
-    qo_tile<D, bf16, row_l, mfma_16x16x32> Q_i;
-    qo_tile<D, bf16, col_l, mfma_32x32x16> dO_i;
+    qo_tile<D, bf16, row_l, mfma_16x16x32> Q_i, dO_i;
+    qo_tile<D, bf16, col_l, mfma_32x32x16> Q_i_col, dO_i_col;
     attn_tile<D, float, accum_col_l, mfma_16x16x32>::col_vec L_i, delta_i;
 
     attn_tile<D, float, accum_col_l> P_ij;
     attn_tile<D, bf16, accum_col_l> P_ij_bf16;
     attn_tile<D, float, accum_col_l> dP_ij;
     attn_tile<D, bf16, accum_col_l> dP_ij_bf16;
+    attn_tile_T<D, bf16, accum_row_l> dP_ij_bf16_accum_row;
 
     attn_tile<D, bf16, col_l, mfma_32x32x16> P_ij_bf16_col;
     attn_tile<D, bf16, col_l, mfma_32x32x16> dP_ij_bf16_col;
+    attn_tile_T<D, bf16, col_l> dP_ij_bf16_col_T;
 
     // 6. Load K_j and V_j from HBM to registers
     const int j = seq_idx * NUM_WARPS + warpid;
-    // load(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}));
-    // __builtin_amdgcn_s_waitcnt(0);
-    // __builtin_amdgcn_s_barrier();
-    // __builtin_amdgcn_sched_barrier(0);
+    load(V_j, g.V, {batch_idx, head_idx, j, 0});
     
     // 7. Initialize dK_j = 0 and dV_j = 0
     zero(dK_j_T);
@@ -253,9 +258,22 @@ __global__ void attend_bwd_combined_ker(const attn_bwd_combined_globals<D> g) {
     // 8. for 1 <= i <= T_r (1024 / 32 = 32)
     for (int i = 0; i < ATTN_N / BLOCK_SIZE_QO; ++i) {
 
+        load(Q_i_smem, g.Q, {batch_idx, head_idx, i, 0});
+        load(dO_i_smem, g.dOg, {batch_idx, head_idx, i, 0});
+        __builtin_amdgcn_s_waitcnt(0);
+        __builtin_amdgcn_s_barrier();
+        __builtin_amdgcn_sched_barrier(0);
+
         // 10. S_ij = Q_i K_j^T * scale
-        load(K_j, g.K, {batch_idx, head_idx, j, 0});
-        load(Q_i, g.Q, {batch_idx, head_idx, i, 0});
+        // load(K_j, g.K, {batch_idx, head_idx, j, 0});
+        load(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}));
+        load(Q_i, Q_i_smem);
+        load(Q_i_col, Q_i_smem);
+        load(dO_i, dO_i_smem); // TODO: replace with SMEM load;
+        load(dO_i_col, dO_i_smem);
+        __builtin_amdgcn_s_waitcnt(0);
+        __builtin_amdgcn_s_barrier();
+        __builtin_amdgcn_sched_barrier(0);
         load(L_i, g.L_vec, {batch_idx, head_idx, 0, i});
         zero(P_ij);
         mma_ABt(P_ij, Q_i, K_j, P_ij);
@@ -267,32 +285,38 @@ __global__ void attend_bwd_combined_ker(const attn_bwd_combined_globals<D> g) {
         copy(P_ij_bf16, P_ij);
 
         // 13. dP_ij = dO_i @ V_j^T
-        load(V_j, g.V, {batch_idx, head_idx, j, 0});
-        load(*(qo_tile<D, bf16, row_l, mfma_16x16x32>*) (&dO_i), g.dOg, {batch_idx, head_idx, i, 0}); // TODO: replace with SMEM load;
+
         load(delta_i, g.delta_vec, {batch_idx, head_idx, 0, i});
         zero(dP_ij);
-        mma_ABt(dP_ij, *(qo_tile<D, bf16, row_l, mfma_16x16x32>*) (&dO_i), V_j, dP_ij);
+        mma_ABt(dP_ij, dO_i, V_j, dP_ij);
         // 14. dS_ij = P_ij o (dP_ij - delta_i)
         sub_row(dP_ij, dP_ij, delta_i);
         mul(dP_ij, dP_ij, P_ij);
         mul(dP_ij, dP_ij, scale_factor);
         copy(dP_ij_bf16, dP_ij);
-        store(g.dS_ij, dP_ij_bf16, {batch_idx,head_idx,i,j}); // TODO: replace with SMEM store
+        // store(g.dS_ij, dP_ij_bf16, {batch_idx,head_idx, i, j}); // TODO: replace with SMEM store
+        swap_layout_and_transpose(dP_ij_bf16_accum_row, dP_ij_bf16);
+        auto attn_i_smem_subtile = subtile_inplace<WARP_SIZE_KV, WARP_SIZE_QO>(attn_i_smem, {warpid, 0});
+        store(attn_i_smem_subtile, dP_ij_bf16_accum_row);
+        __builtin_amdgcn_s_waitcnt(0);
+        __builtin_amdgcn_s_barrier();
+        __builtin_amdgcn_sched_barrier(0);
 
         // 12. dV_j += P_ij^T @ dO_i
-        load(dO_i, g.dOg, {batch_idx, head_idx, i, 0});
+        // load(dO_i_col, g.dOg, {batch_idx, head_idx, i, 0});
         P_ij_bf16_col = swap_layout_inplace<col_l, mfma_32x32x16>(P_ij_bf16);
-        mma_AtB(dV_j_T, dO_i, P_ij_bf16_col, dV_j_T);
+        mma_AtB(dV_j_T, dO_i_col, P_ij_bf16_col, dV_j_T);
         // 16. dK_j += dS_ij^T @ Q_i   (128x64)=(128x16)x(16x64)
-        load(*(qo_tile<D, bf16, col_l, mfma_32x32x16>*) (&Q_i), g.Q, {batch_idx, head_idx, i, 0});
+        // load(Q_i_col, g.Q, {batch_idx, head_idx, i, 0});
         dP_ij_bf16_col = swap_layout_inplace<col_l, mfma_32x32x16>(dP_ij_bf16);
-        mma_AtB(dK_j_T, *(qo_tile<D, bf16, col_l, mfma_32x32x16>*) (&Q_i), dP_ij_bf16_col, dK_j_T);
+        mma_AtB(dK_j_T, Q_i_col, dP_ij_bf16_col, dK_j_T);
 
         // 15. dQ_i += dS_ij @ K_j (32x16)=(32x256)x(256x16)
-        load(*(attn_tile<D, bf16, row_l>*) (&dP_ij_bf16_col), g.dS_ij, {batch_idx,head_idx,i,j});
-        load(*(kv_tile<D, bf16, col_l>*) (&K_j), g.K, {batch_idx, head_idx, j, 0});  // TODO: replace with SMEM load
+        // load(dP_ij_bf16_row, g.dS_ij, {batch_idx,head_idx,i,j});
+        load(dP_ij_bf16_col_T, subtile_inplace<WARP_SIZE_KV, WARP_SIZE_QO>(attn_i_smem, {warpid, 0}));
+        load(K_j_col, g.K, {batch_idx, head_idx, j, 0});  // TODO: replace with SMEM load
         zero(dQ_i_T);
-        mma_AtBt(dQ_i_T, *(kv_tile<D, bf16, col_l>*) (&K_j), *(attn_tile<D, bf16, row_l>*) (&dP_ij_bf16_col),  dQ_i_T);
+        mma_AtB(dQ_i_T, K_j_col, dP_ij_bf16_col_T,  dQ_i_T);
         qo_tile<D, float, accum_row_l> dQ_i;
         swap_layout_and_transpose(dQ_i, dQ_i_T);
         atomic_pk_add_bf16<2>(g.dQg, dQ_i, {batch_idx,head_idx,i,0});
