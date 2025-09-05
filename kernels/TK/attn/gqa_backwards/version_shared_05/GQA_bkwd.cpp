@@ -5,9 +5,9 @@ constexpr int ATTN_B = 16; // batch size
 constexpr int ATTN_H = 16; // number of heads
 constexpr int ATTN_N = 1024; // sequence length
 constexpr int ATTN_D = 128; // dimension
-constexpr int BLOCK_SIZE_QO = 16; // block size for QO
+constexpr int STEP_QO = 32; // block size for QO
 constexpr int BLOCK_SIZE_KV = 256; // block size for KV
-constexpr int WARP_SIZE_QO = 16; // warp size for QO
+constexpr int DOT_SLICE_QO = 16; // warp size for QO
 constexpr int WARP_SIZE_KV = 32; // warp size for KV
 
 #define NUM_WARPS 8
@@ -17,13 +17,13 @@ using G = kittens::group<NUM_WARPS>;
 
 using namespace kittens;
 
-template<int D, typename T=bf16, typename L=row_l, typename M=mfma_16x16x32> using qo_tile = rt<T, WARP_SIZE_QO, D, L, M>;
+template<int D, typename T=bf16, typename L=row_l, typename M=mfma_16x16x32> using qo_tile = rt<T, DOT_SLICE_QO, D, L, M>;
 template<int D, typename T=bf16, typename L=row_l, typename M=mfma_16x16x32> using kv_tile = rt<T, WARP_SIZE_KV, D, L, M>;
 template<int D, typename T=bf16, typename L=row_l, typename M=mfma_16x16x32> using qo_tile_T_dq = rt<T, 16, 16, L, M>;
 template<int D, typename T=bf16, typename L=row_l, typename M=mfma_16x16x32> using qo_tile_dq = rt<T, 16, 16, L, M>;
 template<int D, typename T=bf16, typename L=row_l, typename M=mfma_16x16x32> using kv_tile_T = rt<T, D, WARP_SIZE_KV, L, M>;
-template<int D, typename T=float, typename L=accum_col_l, typename M=mfma_16x16x32> using attn_tile = rt<T, WARP_SIZE_QO, WARP_SIZE_KV, L, M>;
-template<int D, typename T=bf16, typename L=col_l, typename M=mfma_16x16x32> using attn_tile_T = rt<T, WARP_SIZE_KV, WARP_SIZE_QO, L, M>;
+template<int D, typename T=float, typename L=accum_col_l, typename M=mfma_16x16x32> using attn_tile = rt<T, DOT_SLICE_QO, WARP_SIZE_KV, L, M>;
+template<int D, typename T=bf16, typename L=col_l, typename M=mfma_16x16x32> using attn_tile_T = rt<T, WARP_SIZE_KV, DOT_SLICE_QO, L, M>;
 
 template<int D, typename T=bf16, typename L=col_l, typename M=mfma_16x16x32> using attn_tile_T_dq = rt<T, 256, 16, L, M>;
 template<int D, typename T=bf16, typename L=row_l, typename M=mfma_16x16x32> using kv_tile_dq = rt<T, 256, 16, L, M>;
@@ -32,7 +32,7 @@ template<int D> struct attn_prep_globals {
     gl<bf16, -1, -1, -1, -1> Og;
     gl<bf16, -1, -1, -1, -1> dOg; 
     gl<float, -1, -1, -1, -1> delta;
-    dim3 grid() { return dim3(ATTN_B, ATTN_H, ATTN_N / (WARP_SIZE_QO * NUM_WARPS)); }
+    dim3 grid() { return dim3(ATTN_B, ATTN_H, ATTN_N / (DOT_SLICE_QO * NUM_WARPS)); }
     dim3 block() { return dim3(NUM_THREADS); }
     size_t dynamic_shared_memory() { return MAX_SHARED_MEMORY; }
 };
@@ -263,6 +263,8 @@ __device__ inline static void atomic_pk_add_bf16_with_warpid(const GL &dst, cons
     }
 }
 
+/*------------------------------------------------------------------------------------------------*/
+
 template<int D> __launch_bounds__(NUM_THREADS, 1)
 __global__ void attend_bwd_combined_ker(const attn_bwd_combined_globals<D> g) {
     
@@ -278,10 +280,10 @@ __global__ void attend_bwd_combined_ker(const attn_bwd_combined_globals<D> g) {
     extern __shared__ alignment_dummy __shm[];
     shared_allocator al((int*)&__shm[0]);
     st_bf<BLOCK_SIZE_KV, D, ducks::st_layout::accumulator, ducks::st_matrix::mfma_16x16x32> (&K_j_smem) = al.allocate<st_bf<BLOCK_SIZE_KV, D, ducks::st_layout::accumulator, ducks::st_matrix::mfma_16x16x32>>();
-    st_bf<BLOCK_SIZE_QO, D, ducks::st_layout::classical, ducks::st_matrix::mfma_16x16x32> (&Q_i_smem) = al.allocate<st_bf<BLOCK_SIZE_QO, D, ducks::st_layout::classical, ducks::st_matrix::mfma_16x16x32>>();
-    st_bf<BLOCK_SIZE_QO, D, ducks::st_layout::classical, ducks::st_matrix::mfma_16x16x32> (&dO_i_smem) = al.allocate<st_bf<BLOCK_SIZE_QO, D, ducks::st_layout::classical, ducks::st_matrix::mfma_16x16x32>>();
+    st_bf<STEP_QO, D, ducks::st_layout::classical, ducks::st_matrix::mfma_16x16x32> (&Q_i_smem) = al.allocate<st_bf<STEP_QO, D, ducks::st_layout::classical, ducks::st_matrix::mfma_16x16x32>>();
+    st_bf<STEP_QO, D, ducks::st_layout::classical, ducks::st_matrix::mfma_16x16x32> (&dO_i_smem) = al.allocate<st_bf<STEP_QO, D, ducks::st_layout::classical, ducks::st_matrix::mfma_16x16x32>>();
     // We parameterize this using mfma_32x32x16 because we want the base tile for it to be 32x16. Not that it uses that intrinsic.
-    st_bf<BLOCK_SIZE_KV, BLOCK_SIZE_QO, ducks::st_layout::classical, ducks::st_matrix::mfma_32x32x16> (&attn_i_smem) = al.allocate<st_bf<BLOCK_SIZE_KV, BLOCK_SIZE_QO, ducks::st_layout::classical, ducks::st_matrix::mfma_32x32x16>>();
+    st_bf<BLOCK_SIZE_KV, STEP_QO, ducks::st_layout::classical, ducks::st_matrix::mfma_32x32x16> (&attn_i_smem) = al.allocate<st_bf<BLOCK_SIZE_KV, STEP_QO, ducks::st_layout::classical, ducks::st_matrix::mfma_32x32x16>>();
 
     sv_fl<ATTN_N> (&L_smem) = al.allocate<sv_fl<ATTN_N>>();
     sv_fl<ATTN_N> (&delta_smem) = al.allocate<sv_fl<ATTN_N>>();
@@ -321,11 +323,13 @@ __global__ void attend_bwd_combined_ker(const attn_bwd_combined_globals<D> g) {
     zero(dK_j_T);
     zero(dV_j_T);
 
-    // 8. for 1 <= i <= T_r (1024 / 32 = 32)
-    for (int i = 0; i < ATTN_N / BLOCK_SIZE_QO; ++i) {
+    const int num_steps = ATTN_N / STEP_QO;
 
-        load(Q_i_smem, g.Q, {batch_idx, head_idx, i, 0});
-        load(dO_i_smem, g.dOg, {batch_idx, head_idx, i, 0});
+    // 8. for 1 <= i <= T_r (1024 / 32 = 32)
+    for (int i = 0; i < num_steps; ++i) {
+
+        G::load(Q_i_smem, g.Q, {batch_idx, head_idx, i, 0});
+        G::load(dO_i_smem, g.dOg, {batch_idx, head_idx, i, 0});
         __builtin_amdgcn_s_waitcnt(0);
         __builtin_amdgcn_s_barrier();
         __builtin_amdgcn_sched_barrier(0);
@@ -333,36 +337,36 @@ __global__ void attend_bwd_combined_ker(const attn_bwd_combined_globals<D> g) {
         // 10. S_ij = Q_i K_j^T * scale
         // load(K_j, g.K, {batch_idx, head_idx, j, 0});
         load(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}));
-        load(Q_i, Q_i_smem);
-        load(dO_i, dO_i_smem);
+        load(Q_i, subtile_inplace<DOT_SLICE_QO, D>(Q_i_smem, {0, 0}));
+        load(dO_i, subtile_inplace<DOT_SLICE_QO, D>(dO_i_smem, {0, 0}));
         __builtin_amdgcn_s_waitcnt(0);
         __builtin_amdgcn_s_barrier();
         __builtin_amdgcn_sched_barrier(0);
-        load(L_i, subvec_inplace<WARP_SIZE_QO>(L_smem, i));
         zero(P_ij);
         mma_ABt(P_ij, Q_i, K_j, P_ij);
         mul(P_ij, P_ij, scale_factor);
 
         // 11. P_ij = exp(S_ij - L_i)
+        load(L_i, subvec_inplace<DOT_SLICE_QO>(L_smem, i * 2));
         sub_row(P_ij, P_ij, L_i);
         exp(P_ij, P_ij);
         copy(P_ij_bf16, P_ij);
 
         // 13. dP_ij = dO_i @ V_j^T
-        load(delta_i, subvec_inplace<WARP_SIZE_QO>(delta_smem, i));
         zero(dP_ij);
         mma_ABt(dP_ij, dO_i, V_j, dP_ij);
         // 14. dS_ij = P_ij o (dP_ij - delta_i)
+        load(delta_i, subvec_inplace<DOT_SLICE_QO>(delta_smem, i * 2));
         sub_row(dP_ij, dP_ij, delta_i);
         mul(dP_ij, dP_ij, P_ij);
         mul(dP_ij, dP_ij, scale_factor);
         copy(dP_ij_bf16, dP_ij);
 
         swap_layout_and_transpose(dP_ij_bf16_accum_row, dP_ij_bf16);
-        auto attn_i_smem_subtile = subtile_inplace<WARP_SIZE_KV, WARP_SIZE_QO>(attn_i_smem, {warpid, 0});
-        store(attn_i_smem_subtile, dP_ij_bf16_accum_row);
-        load(Q_i_col, Q_i_smem);
-        load(dO_i_col, dO_i_smem);
+        auto attn_i_smem_subtile = subtile_inplace<WARP_SIZE_KV, DOT_SLICE_QO>(attn_i_smem, {warpid, 0});
+        store(attn_i_smem_subtile, dP_ij_bf16_accum_row); // bank conflicts
+        load(Q_i_col, subtile_inplace<DOT_SLICE_QO, D>(Q_i_smem, {0, 0}));
+        load(dO_i_col, subtile_inplace<DOT_SLICE_QO, D>(dO_i_smem, {0, 0}));
         __builtin_amdgcn_s_waitcnt(0);
         __builtin_amdgcn_s_barrier();
         __builtin_amdgcn_sched_barrier(0);
@@ -377,16 +381,74 @@ __global__ void attend_bwd_combined_ker(const attn_bwd_combined_globals<D> g) {
 
         // 15. dQ_i += dS_ij @ K_j (32x16)=(32x256)x(256x16)
         // load(dP_ij_bf16_row, g.dS_ij, {batch_idx,head_idx,i,j});
-        load(dP_ij_bf16_col_T, attn_i_smem);
-        load(K_j_col, subtile_inplace<256, 16>(K_j_smem, {0, warpid}));
-        zero(dQ_i_T);
+        load(dP_ij_bf16_col_T, attn_i_smem); // bank conflicts
+        load(K_j_col, subtile_inplace<256, 16>(K_j_smem, {0, warpid})); // bank conflicts
         __builtin_amdgcn_s_waitcnt(0);
         __builtin_amdgcn_s_barrier();
         __builtin_amdgcn_sched_barrier(0);
+        zero(dQ_i_T);
         mma_AtB(dQ_i_T, K_j_col, dP_ij_bf16_col_T,  dQ_i_T);
         qo_tile_dq<D, float, accum_row_l> dQ_i;
         swap_layout_and_transpose(dQ_i, dQ_i_T);
-        atomic_pk_add_bf16_with_warpid<2>(g.dQg, dQ_i, {batch_idx, head_idx, i, 0}, warpid);
+        atomic_pk_add_bf16_with_warpid<2>(g.dQg, dQ_i, {batch_idx, head_idx, i * 2, 0}, warpid);
+
+        // next dot slice along qo
+                // 10. S_ij = Q_i K_j^T * scale
+        // load(K_j, g.K, {batch_idx, head_idx, j, 0});
+        load(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}));
+        load(Q_i, subtile_inplace<DOT_SLICE_QO, D>(Q_i_smem, {1, 0}));
+        load(dO_i, subtile_inplace<DOT_SLICE_QO, D>(dO_i_smem, {1, 0}));
+        __builtin_amdgcn_s_waitcnt(0);
+        __builtin_amdgcn_s_barrier();
+        __builtin_amdgcn_sched_barrier(0);
+        zero(P_ij);
+        mma_ABt(P_ij, Q_i, K_j, P_ij);
+        mul(P_ij, P_ij, scale_factor);
+
+        // 11. P_ij = exp(S_ij - L_i)
+        load(L_i, subvec_inplace<DOT_SLICE_QO>(L_smem, i * 2 + 1));
+        sub_row(P_ij, P_ij, L_i);
+        exp(P_ij, P_ij);
+        copy(P_ij_bf16, P_ij);
+
+        // 13. dP_ij = dO_i @ V_j^T
+        zero(dP_ij);
+        mma_ABt(dP_ij, dO_i, V_j, dP_ij);
+        // 14. dS_ij = P_ij o (dP_ij - delta_i)
+        load(delta_i, subvec_inplace<DOT_SLICE_QO>(delta_smem, i * 2 + 1));
+        sub_row(dP_ij, dP_ij, delta_i);
+        mul(dP_ij, dP_ij, P_ij);
+        mul(dP_ij, dP_ij, scale_factor);
+        copy(dP_ij_bf16, dP_ij);
+
+        swap_layout_and_transpose(dP_ij_bf16_accum_row, dP_ij_bf16);
+        attn_i_smem_subtile = subtile_inplace<WARP_SIZE_KV, DOT_SLICE_QO>(attn_i_smem, {warpid, 0});
+        store(attn_i_smem_subtile, dP_ij_bf16_accum_row); // bank conflicts
+        load(Q_i_col, subtile_inplace<DOT_SLICE_QO, D>(Q_i_smem, {1, 0}));
+        load(dO_i_col, subtile_inplace<DOT_SLICE_QO, D>(dO_i_smem, {1, 0}));
+        __builtin_amdgcn_s_waitcnt(0);
+        __builtin_amdgcn_s_barrier();
+        __builtin_amdgcn_sched_barrier(0);
+        // 12. dV_j += P_ij^T @ dO_i
+        // load(dO_i_col, g.dOg, {batch_idx, head_idx, i, 0});
+        P_ij_bf16_col = swap_layout_inplace<col_l, mfma_32x32x16>(P_ij_bf16);
+        mma_AtB(dV_j_T, dO_i_col, P_ij_bf16_col, dV_j_T);
+        // 16. dK_j += dS_ij^T @ Q_i   (128x64)=(128x16)x(16x64)
+        // load(Q_i_col, g.Q, {batch_idx, head_idx, i, 0});
+        dP_ij_bf16_col = swap_layout_inplace<col_l, mfma_32x32x16>(dP_ij_bf16);
+        mma_AtB(dK_j_T, Q_i_col, dP_ij_bf16_col, dK_j_T);
+
+        // 15. dQ_i += dS_ij @ K_j (32x16)=(32x256)x(256x16)
+        // load(dP_ij_bf16_row, g.dS_ij, {batch_idx,head_idx,i,j});
+        load(dP_ij_bf16_col_T, attn_i_smem); // bank conflicts
+        load(K_j_col, subtile_inplace<256, 16>(K_j_smem, {0, warpid})); // bank conflicts
+        __builtin_amdgcn_s_waitcnt(0);
+        __builtin_amdgcn_s_barrier();
+        __builtin_amdgcn_sched_barrier(0);
+        zero(dQ_i_T);
+        mma_AtB(dQ_i_T, K_j_col, dP_ij_bf16_col_T,  dQ_i_T);
+        swap_layout_and_transpose(dQ_i, dQ_i_T);
+        atomic_pk_add_bf16_with_warpid<2>(g.dQg, dQ_i, {batch_idx, head_idx, i * 2 + 1, 0}, warpid);
     }
 
     // 18. Write dK_j and dV_j back to HBM
