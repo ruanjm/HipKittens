@@ -30,12 +30,11 @@ __device__ static inline void load(SV &dst, const GL &src, const COORD &idx) {
     //     }
     // }
     using T = typename SV::dtype;
-    constexpr int bytes_per_thread = 16;
+    constexpr int bytes_per_thread = 4;
     constexpr int num_memcpys = (SV::length * sizeof(T) + N_THREADS*bytes_per_thread - 1) / (N_THREADS*bytes_per_thread);
     static_assert(num_memcpys > 0, "num_memcpys must be greater than 0. Please decrease the number of threads.");
-
-    constexpr int elem_per_thread = bytes_per_thread / sizeof(T);
-    constexpr int elem_per_warp = elem_per_thread * kittens::WARP_THREADS;
+    constexpr int bytes_per_warp = bytes_per_thread * kittens::WARP_THREADS;
+    constexpr int elem_per_warp = bytes_per_warp / sizeof(T);
     constexpr int num_warps = N_THREADS / kittens::WARP_THREADS;
     const int laneid = kittens::laneid() % N_THREADS;
     const int warpid = kittens::warpid() % num_warps;
@@ -49,7 +48,7 @@ __device__ static inline void load(SV &dst, const GL &src, const COORD &idx) {
     for (int i = 0; i < num_memcpys; i++) {
         const int warp_offset = warpid + i * num_warps;
         const int lane_offset = laneid % kittens::WARP_THREADS;
-        const int lane_byte_offset = (warp_offset * elem_per_warp + lane_offset * elem_per_thread) * sizeof(T);
+        const int lane_byte_offset = warp_offset * bytes_per_warp + lane_offset * bytes_per_thread;
 
         const T* lds_elem_ptr = lds_base + (i * num_warps * elem_per_warp);
 
@@ -59,7 +58,7 @@ __device__ static inline void load(SV &dst, const GL &src, const COORD &idx) {
         llvm_amdgcn_raw_buffer_load_lds(
             srsrc,
             lds_ptr,
-            16,
+            4,
             lane_byte_offset,
             0,
             0,
