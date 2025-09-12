@@ -212,7 +212,7 @@ TimingResult matmul_ref(const std::vector<fp8e4m3>& a, const std::vector<fp8e4m3
     constexpr int threads_per_warp = 64;
     constexpr int warps_per_cu = 8;
     constexpr int threads_per_block = threads_per_warp * warps_per_cu;
-    constexpr int threadblocks = 1024;
+    constexpr int threadblocks = M / 256 * N / 256;
     
     // Ensure input vectors have correct size
     if (a.size() != M * K) {
@@ -1923,7 +1923,7 @@ TimingResult matmul_host(const std::vector<fp8e4m3>& a, const std::vector<fp8e4m
     constexpr int threads_per_warp = 64;
     constexpr int warps_per_cu = 4;
     constexpr int threads_per_block = threads_per_warp * warps_per_cu;
-    constexpr int threadblocks = 1024;
+    constexpr int threadblocks = M / 256 * N / 256;
     
     // Ensure input vectors have correct size
     if (a.size() != M * K) {
