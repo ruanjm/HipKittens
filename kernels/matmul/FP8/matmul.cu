@@ -919,7 +919,6 @@ __global__ __launch_bounds__(256, 1) void matmul_device(const kittens::gl<fp8e4m
                     );
                     __builtin_amdgcn_s_setprio(1);
                     mma_ABt_base_wrapper(c_rt, a_rt, b_rt, c_rt, 3, 0, 0);
-                    mma_ABt_base_wrapper(c_rt, a_rt, b_rt, c_rt, 3, 1, 0);
                     __builtin_amdgcn_s_setprio(0);
         
                     asm volatile(
@@ -930,6 +929,7 @@ __global__ __launch_bounds__(256, 1) void matmul_device(const kittens::gl<fp8e4m
                     );
                     __builtin_amdgcn_s_setprio(1);
                     mma_ABt_base_wrapper(c_rt, a_rt, b_rt, c_rt, 3, 2, 0);
+                    mma_ABt_base_wrapper(c_rt, a_rt, b_rt, c_rt, 3, 1, 0);
                     __builtin_amdgcn_s_setprio(0);
                     __builtin_amdgcn_sched_barrier(0);
                     asm volatile("s_waitcnt lgkmcnt(0)");
