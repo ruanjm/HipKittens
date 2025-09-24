@@ -3,7 +3,7 @@ import random
 import math
 import tk_kernel_fwd
 import tk_kernel_bkwd
-import tk_kernel_bkwd_fp32
+# import tk_kernel_bkwd_fp32
 import time
 
 use_aiter = True
@@ -25,7 +25,7 @@ torch.set_printoptions(
 # Benchmarking
 # **************************************************
 
-num_iters = 1
+num_iters = 10000
 start_event = torch.cuda.Event(enable_timing=True) # in milliseconds
 end_event = torch.cuda.Event(enable_timing=True)
 
@@ -83,6 +83,69 @@ def reference_forward(Q, K, V, causal):
     output = torch.matmul(QK, v_expanded)
     
     return output, q_, k_, v_
+
+def reference_forward_tiled(Q, K, V, causal):
+    """Tiled reference implementation with proper online softmax using BHND layout"""
+    q_ = Q.detach().to(torch.bfloat16).requires_grad_(True)
+    k_ = K.detach().to(torch.bfloat16).requires_grad_(True)
+    v_ = V.detach().to(torch.bfloat16).requires_grad_(True)
+
+    q_batch, q_head, q_seq, q_dim = q_.shape
+    k_batch, k_head, k_seq, k_dim = k_.shape
+    v_batch, v_head, v_seq, v_dim = v_.shape
+
+    assert q_batch == k_batch == v_batch
+    assert q_head == k_head == v_head
+    assert q_seq == k_seq == v_seq
+    assert q_dim == k_dim == v_dim
+
+    attn = torch.zeros((q_batch, q_head, q_seq, q_seq), device=q_.device, dtype=torch.float32)
+    output = torch.zeros_like(q_)
+    Q_BLOCK_SIZE = 1024
+    KV_BLOCK_SIZE = 1024
+    scale = 1.0 / math.sqrt(q_dim)
+
+    for b in range(0, q_batch):
+        for h in range(0, q_head):
+            for s_block in range(0, q_seq, Q_BLOCK_SIZE):
+                q_block = q_[b, h, s_block:s_block+Q_BLOCK_SIZE, :]
+                q_end = min(s_block + Q_BLOCK_SIZE, q_seq)
+
+                # Online softmax state
+                max_vec = torch.full((q_block.shape[0], 1), float('-inf'), device=q_block.device, dtype=torch.float32)
+                norm_vec = torch.zeros((q_block.shape[0], 1), device=q_block.device, dtype=torch.float32)
+                o_reg = torch.zeros_like(q_block, dtype=torch.float32)
+
+                for k_start in range(0, k_seq, KV_BLOCK_SIZE):
+                    k_end = min(k_start + KV_BLOCK_SIZE, k_seq)
+                    k_block = k_[b, h, k_start:k_end, :]
+                    v_block = v_[b, h, k_start:k_end, :]
+
+                    # # Compute QK^T scaled
+                    # QK = torch.matmul(q_block, k_block.transpose(-2, -1)).to(torch.float32) * scale
+                    QK = torch.matmul(q_block, k_block.transpose(-2, -1))
+                    attn[b, h, s_block:s_block+Q_BLOCK_SIZE, k_start:k_end] = QK
+                    QK = QK.to(torch.float32) * scale
+
+                    # Online softmax update
+                    max_vec_prev = max_vec.clone()
+                    max_vec = torch.maximum(max_vec, torch.max(QK, dim=-1, keepdim=True)[0])
+
+                    max_vec_prev = max_vec_prev - max_vec
+                    max_vec_prev = torch.exp(max_vec_prev)
+
+                    QK = QK - max_vec
+                    QK = torch.exp(QK)
+
+                    norm_vec = norm_vec * max_vec_prev + torch.sum(QK, dim=-1, keepdim=True)
+                    o_reg = o_reg * max_vec_prev + torch.matmul(QK.to(torch.bfloat16), v_block).to(torch.float32)
+                    # o_reg = o_reg + torch.matmul(QK, v_block).to(torch.float32)
+
+                # Final normalization
+                output[b, h, s_block:s_block+Q_BLOCK_SIZE, :] = (o_reg / norm_vec).to(q_.dtype)
+                # output[b, h, s_block:s_block+Q_BLOCK_SIZE, :] = o_reg.to(q_.dtype)
+
+    return output, attn, q_, k_, v_
 
 def simple_flash_backward(Q, K, V, dO, L):
     """GQA version that should match PyTorch exactly"""
@@ -150,10 +213,10 @@ def generate_tensor(shape, mean, std, dtype, device):
 def generate_inputs():
     # Generate in BHND format (batch, heads, seq, dim) for GQA
     # Q has h_q heads, but K and V have h_kv heads
-    Q = generate_tensor((b, h_q, n, d), mean, std, torch.bfloat16, 'cuda')
-    K = generate_tensor((b, h_kv, n, d), mean, std, torch.bfloat16, 'cuda') 
-    V = generate_tensor((b, h_kv, n, d), mean, std, torch.bfloat16, 'cuda')
-    dO = generate_tensor((b, h_q, n, d), mean, std, torch.bfloat16, 'cuda') 
+    Q = generate_tensor((b, h_q, n, d), mean, std, dtype, 'cuda')
+    K = generate_tensor((b, h_kv, n, d), mean, std, dtype, 'cuda') 
+    V = generate_tensor((b, h_kv, n, d), mean, std, dtype, 'cuda')
+    dO = generate_tensor((b, h_q, n, d), mean, std, dtype, 'cuda') 
 
     Q.requires_grad_(True)
     K.requires_grad_(True)
@@ -168,8 +231,16 @@ def read_inputs():
     return Q_bhnd, K_bhnd, V_bhnd, dO_bhnd
 
 # Generate base inputs in BHND format
-Q_bhnd, K_bhnd, V_bhnd, dO_bhnd = generate_inputs()
-# Q_bhnd, K_bhnd, V_bhnd, dO_bhnd = read_inputs()
+# Q_bhnd, K_bhnd, V_bhnd, dO_bhnd = generate_inputs()
+Q_bhnd, K_bhnd, V_bhnd, dO_bhnd = read_inputs()
+expanded_K_bhnd, expanded_V_bhnd = expand_kv_for_gqa(K_bhnd, V_bhnd, h_q, h_kv)
+
+# **************************************************
+# Reference tiled forward and backward
+# **************************************************
+
+out_ref_tiled, attn_ref_tiled, q_ref_tiled, k_ref_tiled, v_ref_tiled = reference_forward_tiled(Q_bhnd, expanded_K_bhnd, expanded_V_bhnd, causal)
+out_ref_tiled = out_ref_tiled.transpose(1, 2).contiguous()
 
 # **************************************************
 # AITER forward and backward
@@ -177,9 +248,9 @@ Q_bhnd, K_bhnd, V_bhnd, dO_bhnd = generate_inputs()
 
 if use_aiter:
     timings = []
-    print("\nRunning AITER...")
+    # print("\nRunning AITER...")
     
-    for _ in range(num_iters):
+    for _ in range(1):
         Q_aiter = Q_bhnd.transpose(1, 2).contiguous().detach().requires_grad_(True)  
         K_aiter = K_bhnd.transpose(1, 2).contiguous().detach().requires_grad_(True)  
         V_aiter = V_bhnd.transpose(1, 2).contiguous().detach().requires_grad_(True)  
@@ -202,35 +273,39 @@ if use_aiter:
     k_grad_aiter_bnhd = K_aiter.grad  
     v_grad_aiter_bnhd = V_aiter.grad
     out_aiter_bnhd = out_aiter
-    # out_aiter_bhnd = out_aiter.transpose(1, 2)  # BNHD -> BHND
-    # q_grad_aiter_bhnd = q_grad_aiter_bnhd.transpose(1, 2)  # BNHD -> BHND
-    # k_grad_aiter_bhnd = k_grad_aiter_bnhd.transpose(1, 2)  # BNHD -> BHND
-    # v_grad_aiter_bhnd = v_grad_aiter_bnhd.transpose(1, 2)  # BNHD -> BHND
+
+    delta_aiter = (dO_aiter * out_aiter).sum(dim=-1, keepdim=True).transpose(1, 2).contiguous()
+    out_aiter_bhnd = out_aiter.transpose(1, 2)  # BNHD -> BHND
+    q_grad_aiter_bhnd = q_grad_aiter_bnhd.transpose(1, 2)  # BNHD -> BHND
+    k_grad_aiter_bhnd = k_grad_aiter_bnhd.transpose(1, 2)  # BNHD -> BHND
+    v_grad_aiter_bhnd = v_grad_aiter_bnhd.transpose(1, 2)  # BNHD -> BHND
 
 # **************************************************
 # ThunderKittens
 # **************************************************
+for i in range(num_iters):
 
-# Get forwards pass outputs
-Q_tk = Q_bhnd.transpose(1, 2).bfloat16().clone().contiguous().detach().requires_grad_(True)  
-K_tk = K_bhnd.transpose(1, 2).bfloat16().clone().contiguous().detach().requires_grad_(True)  
-V_tk = V_bhnd.transpose(1, 2).bfloat16().clone().contiguous().detach().requires_grad_(True) 
-dO_tk = dO_bhnd.transpose(1, 2).bfloat16().clone().contiguous()
+    if i % 1000 == 0:
+        print(f"Running ThunderKittens BF16 fwd {i} of {num_iters} ...")
+    # Get forwards pass outputs
+    # print("Running ThunderKittens BF16 fwd ...")
+    Q_tk = Q_bhnd.transpose(1, 2).bfloat16().clone().contiguous().detach().requires_grad_(True)  
+    K_tk = K_bhnd.transpose(1, 2).bfloat16().clone().contiguous().detach().requires_grad_(True)  
+    V_tk = V_bhnd.transpose(1, 2).bfloat16().clone().contiguous().detach().requires_grad_(True)  
+    dO_tk = dO_bhnd.transpose(1, 2).bfloat16().clone().contiguous()
 
-# Call TK forward to get O and L
-O_tk = torch.zeros_like(out_aiter_bnhd).bfloat16().clone().contiguous()
-L_tk = torch.zeros((b, h_q, n, 1), device='cuda').float().transpose(-1, -2).contiguous()
-# print(Q_tk.shape, K_tk.shape, V_tk.shape, O_tk.shape, L_tk.shape)
-tk_kernel_fwd.dispatch_fwd(Q_tk, K_tk, V_tk, O_tk, L_tk)
-torch.cuda.synchronize()
+    # Call TK forward to get O and L
+    # attn_tk = torch.zeros((b, h_q, n, n), device='cuda').float().contiguous()
+    O_tk = torch.zeros_like(Q_tk).clone().contiguous()
+    L_tk = torch.zeros((b, h_q, n, 1), device='cuda').float().transpose(-1, -2).contiguous()
+    # print(Q_tk.shape, K_tk.shape, V_tk.shape, O_tk.shape, L_tk.shape)
+    torch.cuda.synchronize()
+    tk_kernel_fwd.dispatch_fwd(Q_tk, K_tk, V_tk, O_tk, L_tk)
+    torch.cuda.synchronize()
 
-# L_tk = L_tiled.float().contiguous()
-
-# TK
-print("Running ThunderKittens BF16 bkwd ...")
-timings = []
-
-for _ in range(num_iters):
+    # TK
+    # print("Running ThunderKittens BF16 bkwd ...")
+    timings = []
     dQ_tk_in = torch.zeros_like(q_grad_aiter_bnhd).bfloat16().transpose(1, 2).contiguous()
     dQ_tk = torch.zeros_like(q_grad_aiter_bnhd).bfloat16().contiguous()
     dK_tk = torch.zeros_like(k_grad_aiter_bnhd).bfloat16().contiguous()
@@ -245,6 +320,7 @@ for _ in range(num_iters):
         dO_tk,    # dOg
         delta_tk, # delta
     )
+    torch.cuda.synchronize()
 
     tk_kernel_bkwd.dispatch_bwd_combined(
         Q_tk,     
@@ -258,6 +334,7 @@ for _ in range(num_iters):
         L_tk,
         delta_tk
     )
+    torch.cuda.synchronize()
 
     tk_kernel_bkwd.dispatch_dq_shuffle(
         dQ_tk_in,
@@ -266,6 +343,17 @@ for _ in range(num_iters):
 
     end_event.record()
     torch.cuda.synchronize()
+
+    if dQ_tk.isnan().any():
+        print("dQ_tk is nan")
+        breakpoint()
+    if dK_tk.isnan().any():
+        print("dK_tk is nan")
+        breakpoint()
+    if dV_tk.isnan().any():
+        print("dV_tk is nan")
+        breakpoint()
+
     elapsed_time = start_event.elapsed_time(end_event)
     timings.append(elapsed_time)
     delta_tk = delta_tk.transpose(-1, -2).contiguous()
@@ -275,66 +363,18 @@ eff_tk = efficiency(flops_ref, avg_time_tk)
 print(f"ThunderKittens average execution time: {avg_time_tk:.4f} ms")
 print(f"ThunderKittens performance: {eff_tk:.2f} TFLOPS for {b=} h_q={h_q} h_kv={h_kv} {n=} {d=} {causal=}.\n")
 
-print("Running ThunderKittens FP32 bkwd ...")
-timings = []
-
-for _ in range(num_iters):
-    dQ_tk_in_fp32 = torch.zeros_like(q_grad_aiter_bnhd).float().transpose(1, 2).contiguous()
-    dQ_tk_fp32 = torch.zeros_like(q_grad_aiter_bnhd).float().contiguous()
-    dK_tk_fp32 = torch.zeros_like(k_grad_aiter_bnhd).float().contiguous()
-    dV_tk_fp32 = torch.zeros_like(v_grad_aiter_bnhd).float().contiguous()
-    delta_tk_fp32 = torch.zeros((b, h_q, n, 1), device='cuda').float().transpose(-1, -2).contiguous()
-    torch.cuda.synchronize()
-    start_event.record()
-    
-    tk_kernel_bkwd_fp32.dispatch_prep(
-        O_tk,     # Og
-        dO_tk,    # dOg
-        delta_tk_fp32
-    )
-    
-    tk_kernel_bkwd_fp32.dispatch_bwd_combined(
-        Q_tk,     
-        K_tk,     
-        V_tk,     
-        O_tk,     
-        dO_tk,    
-        dQ_tk_fp32,   
-        dK_tk_fp32,    
-        dV_tk_fp32,    
-        L_tk,
-        delta_tk_fp32
-    )
-    
-    # tk_kernel_bkwd_fp32.dispatch_dq_shuffle(
-    #     dQ_tk_in_fp32,
-    #     dQ_tk_fp32
-    # )
-    
-    end_event.record()
-    torch.cuda.synchronize()
-    elapsed_time = start_event.elapsed_time(end_event)
-    timings.append(elapsed_time)
-    delta_tk_fp32 = delta_tk_fp32.transpose(-1, -2).contiguous()
-
-L_tk = L_tk.transpose(-1, -2).contiguous()
-    
-avg_time_tk_fp32 = sum(timings) / len(timings)
-eff_tk_fp32 = efficiency(flops_ref, avg_time_tk_fp32)
-print(f"ThunderKittens FP32 average execution time: {avg_time_tk_fp32:.4f} ms")
-print(f"ThunderKittens FP32 performance: {eff_tk_fp32:.2f} TFLOPS for {b=} h_q={h_q} h_kv={h_kv} {n=} {d=} {causal=}.\n")
-
 # **************************************************
 # Comparisons
 # **************************************************
 
-num_print = 8
+num_print = 16
 
 # TK vs AITER
-print(f"\nTK vs AITER comparison:")
+print(f"\nTK vs AITER vs Reference comparison:")
 print("\nO outputs:")
-print("TK: ", O_tk[0, 0, :num_print, 0], "Max:", O_tk.max().item())
-print("AITER: ", out_aiter_bnhd[0, 0, :num_print, 0], "Max:", out_aiter_bnhd.max().item())
+print("TK: ", O_tk[0, 0, 0, :num_print], "Max:", O_tk.max().item())
+print("AITER: ", out_aiter_bnhd[0, 0, 0, :num_print], "Max:", out_aiter_bnhd.max().item())
+print("Reference tiled: ", out_ref_tiled[0, 0, 0, :num_print], "Max:", out_ref_tiled.max().item())
 
 print()
 print("\nGradient K outputs:")
@@ -350,7 +390,6 @@ print()
 print("Gradient Q outputs:")
 print("TK: ", dQ_tk[0, 0, 0, :num_print], "Max:", dQ_tk.max().item())
 print("AITER: ", q_grad_aiter_bnhd[0, 0, 0, :num_print], "Max:", q_grad_aiter_bnhd.max().item())
-# print("Diff: ", (dQ_tk - q_grad_aiter_bnhd)[0, :, 0, 32:48], "Max:", (dQ_tk - q_grad_aiter_bnhd).max().item())
 
 
 # **************************************************
@@ -362,10 +401,26 @@ o_diff, o_err_cnt, o_total, o_rel_error, o_l2_error, o_cos, o_mask = robustness_
 print(f"O: max_abs={o_diff.max().item():.6f}, max_rel={o_rel_error:.4f}, "
       f"rel_l2={o_l2_error:.4f}, cos={o_cos:.6f}, "
       f"errors={o_err_cnt}/{o_total} ({100*o_err_cnt/o_total:.4f}%)")
+L_diff, L_err_cnt, L_total, L_rel_error, L_l2_error, L_cos, L_mask = robustness_check(L_tk, softmax_lse.unsqueeze(-1).transpose(-1, -2).contiguous())
+print(f"L: max_abs={L_diff.max().item():.6f}, max_rel={L_rel_error:.4f}, "
+      f"rel_l2={L_l2_error:.4f}, cos={L_cos:.6f}, "
+      f"errors={L_err_cnt}/{L_total} ({100*L_err_cnt/L_total:.4f}%)")
 
-# **************************************************
-# TK vs AITER (gradient comparisons)
-# **************************************************
+print(f"\nRobustness checks (TK vs Reference):") 
+o_diff, o_err_cnt, o_total, o_rel_error, o_l2_error, o_cos, o_mask = robustness_check(O_tk, out_ref_tiled)
+print(f"O: max_abs={o_diff.max().item():.6f}, max_rel={o_rel_error:.4f}, "
+      f"rel_l2={o_l2_error:.4f}, cos={o_cos:.6f}, "
+      f"errors={o_err_cnt}/{o_total} ({100*o_err_cnt/o_total:.4f}%)")
+
+print(f"\nRobustness checks (AITER vs Reference):")
+o_diff, o_err_cnt, o_total, o_rel_error, o_l2_error, o_cos, o_mask = robustness_check(out_aiter_bnhd, out_ref_tiled)
+print(f"O: max_abs={o_diff.max().item():.6f}, max_rel={o_rel_error:.4f}, "
+      f"rel_l2={o_l2_error:.4f}, cos={o_cos:.6f}, "
+      f"errors={o_err_cnt}/{o_total} ({100*o_err_cnt/o_total:.4f}%)")
+
+# # **************************************************
+# # TK vs AITER (gradient comparisons)
+# # **************************************************
 print(f"\nGradient comparisons (TK vs AITER):") 
 
 # Compute diffs in float32 to avoid bf16 quantization in the comparison itself
@@ -382,27 +437,3 @@ print(f"K grad: max_abs={k_diff.max().item():.6f}, max_rel={k_rel_error:.4f}, "
 print(f"V grad: max_abs={v_diff.max().item():.6f}, max_rel={v_rel_error:.4f}, "
       f"rel_l2={v_l2_error:.4f}, cos={v_cos:.6f}, "
       f"errors={v_err_cnt}/{v_total} ({100*v_err_cnt/v_total:.4f}%)")
-
-# **************************************************
-# TK BF16 vs TK FP32
-# **************************************************
-print(f"\nTK BF16 vs TK FP32 comparison:")
-print("TK BF16: ", dQ_tk[0, 0, 0, :num_print], "Max:", dQ_tk.max().item())
-print("TK FP32: ", dQ_tk_fp32[0, 0, 0, :num_print], "Max:", dQ_tk_fp32.max().item())
-
-q_in_diff, q_in_err_cnt, q_in_total, q_in_rel_error, q_in_l2_error, q_in_cos, q_in_mask = robustness_check(dQ_tk, dQ_tk_fp32)
-print(f"Q in grad: max_abs={q_in_diff.max().item():.6f}, max_rel={q_in_rel_error:.4f}, "
-      f"rel_l2={q_in_l2_error:.4f}, cos={q_in_cos:.6f}, "
-      f"errors={q_in_err_cnt}/{q_in_total} ({100*q_in_err_cnt/q_in_total:.4f}%)")
-
-# **************************************************
-# TK FP32 vs AITER
-# **************************************************
-print(f"\nTK FP32 vs AITER comparison:")
-print("TK FP32: ", dQ_tk_fp32[0, 0, 0, :num_print], "Max:", dQ_tk_fp32.max().item())
-print("AITER: ", q_grad_aiter_bnhd[0, 0, 0, :num_print], "Max:", q_grad_aiter_bnhd.max().item())
-
-q_diff, q_err_cnt, q_total, q_rel_error, q_l2_error, q_cos, q_mask = robustness_check(q_grad_aiter_bnhd, dQ_tk_fp32)
-print(f"Q grad: max_abs={q_diff.max().item():.6f}, max_rel={q_rel_error:.4f}, "
-      f"rel_l2={q_l2_error:.4f}, cos={q_cos:.6f}, "
-      f"errors={q_err_cnt}/{q_total} ({100*q_err_cnt/q_total:.4f}%)")

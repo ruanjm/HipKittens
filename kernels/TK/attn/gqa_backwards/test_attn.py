@@ -130,8 +130,8 @@ def simple_flash_backward(Q, K, V, dO, L):
 
 causal = False
 b = 16
-h_q = 64  # number of query heads  
-h_kv = 8  # number of key/value heads (for GQA)
+h_q = 16  # number of query heads  
+h_kv = 16  # number of key/value heads (for GQA)
 group_size = h_q // h_kv  # queries per KV head group
 n = 8192
 d = 128
