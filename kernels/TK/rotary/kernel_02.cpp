@@ -1,7 +1,7 @@
 #include "kittens.cuh"
 #include "pyutils/pyutils.cuh"
 
-#define NUM_WORKERS (8) 
+#define NUM_WORKERS (1) 
 #define NUM_THREADS (NUM_WORKERS*kittens::WARP_THREADS)
 
 constexpr int ATTN_B = 16;
@@ -14,7 +14,6 @@ constexpr int ROPE_DIM = static_cast<int>(rope_embd_fraction * HEAD_DIM);
 constexpr int HALF_ROPE_DIM = (ROPE_DIM / 2);
 constexpr int EXCESS_DIM = HEAD_DIM - ROPE_DIM; 
 constexpr int BLOCK_SIZE = 32;
-constexpr int DOT_SLICE = 32;
 
 using namespace kittens;
 
@@ -32,47 +31,49 @@ template<int _d_model> struct rotary_globals {
     sin_gl sin;
     cos_gl cos;
 
-    dim3 grid() { return dim3(ATTN_B, ATTN_N/(BLOCK_SIZE)); }
+    dim3 grid() { return dim3((ATTN_B*ATTN_H), ATTN_N/(BLOCK_SIZE)); }
     dim3 block() { return dim3(NUM_THREADS); }
     size_t dynamic_shared_memory() { return (0); }
 };
 
 template<int D>
-__device__ void apply_rotary_embedding(rt<bf16, BLOCK_SIZE, ROPE_DIM> &x_reg,
+__device__ __forceinline__ void apply_rotary_embedding(rt<bf16, BLOCK_SIZE, ROPE_DIM> &x_reg,
                                               const rt<bf16, BLOCK_SIZE, HALF_ROPE_DIM> &cos_reg,
                                               const rt<bf16, BLOCK_SIZE, HALF_ROPE_DIM> &sin_reg) {
-    rt<bf16, BLOCK_SIZE, HALF_ROPE_DIM> x1, x2, temp1, temp2;
-    constexpr int half_dim_tiles = HALF_ROPE_DIM / BLOCK_SIZE;  
-    #pragma unroll
-    for(int i = 0; i < half_dim_tiles; i++) {
-        #pragma unroll
-        for(int j = 0; j < rt<bf16, BLOCK_SIZE, HALF_ROPE_DIM>::packed_per_thread; j++){
-            x1.tiles[0][i].data[j] = x_reg.tiles[0][i].data[j];                   
-            x2.tiles[0][i].data[j] = x_reg.tiles[0][i + half_dim_tiles].data[j];
-        }
-    }
-    // new_x1 = x1 * cos - x2 * sin   new_x2 = x2 * cos + x1 * sin
-    mul(temp1, x1, cos_reg);  
-    mul(temp2, x2, sin_reg);  
-    sub(temp1, temp1, temp2); 
-    mul(temp2, x2, cos_reg);  
-    mul(x1, x1, sin_reg);     
-    add(temp2, temp2, x1);    
+    rt<bf16, BLOCK_SIZE, HALF_ROPE_DIM> temp1, temp2, temp3;
+    constexpr int half_dim_tiles = HALF_ROPE_DIM / BLOCK_SIZE;
     #pragma unroll
     for(int i = 0; i < half_dim_tiles; i++) {
         #pragma unroll
         for(int j = 0; j < rt<bf16, BLOCK_SIZE, HALF_ROPE_DIM>::packed_per_thread; j++) {
-            x_reg.tiles[0][i].data[j] = temp1.tiles[0][i].data[j];         
-            x_reg.tiles[0][i + half_dim_tiles].data[j] = temp2.tiles[0][i].data[j];    
+            auto x1_val = x_reg.tiles[0][i].data[j];
+            auto x2_val = x_reg.tiles[0][i + half_dim_tiles].data[j];
+            auto cos_val = cos_reg.tiles[0][i].data[j];
+            auto sin_val = sin_reg.tiles[0][i].data[j];
+            
+            // Compute new values directly
+            temp1.tiles[0][i].data[j] = __hsub2(__hmul2(x1_val, cos_val), __hmul2(x2_val, sin_val));
+            temp2.tiles[0][i].data[j] = __hadd2(__hmul2(x2_val, cos_val), __hmul2(x1_val, sin_val));
+        }
+    }
+    
+    // Single write-back pass
+    #pragma unroll
+    for(int i = 0; i < half_dim_tiles; i++) {
+        #pragma unroll
+        for(int j = 0; j < rt<bf16, BLOCK_SIZE, HALF_ROPE_DIM>::packed_per_thread; j++) {
+            x_reg.tiles[0][i].data[j] = temp1.tiles[0][i].data[j];
+            x_reg.tiles[0][i + half_dim_tiles].data[j] = temp2.tiles[0][i].data[j];
         }
     }
 }
 
-template<int D> __launch_bounds__(NUM_THREADS, 2)
+template<int D> __launch_bounds__(NUM_THREADS, 4)
 __global__ void tk_fused_rotary(const rotary_globals<D> g) {
     auto warpid = kittens::warpid();
     auto lane = kittens::laneid();
-    const int b = blockIdx.x;
+    const int b = blockIdx.x/ATTN_H;
+    const int h = blockIdx.x%ATTN_H;
     const int n = blockIdx.y;
 
     rt<bf16, BLOCK_SIZE, ROPE_DIM> x_reg;
@@ -80,16 +81,10 @@ __global__ void tk_fused_rotary(const rotary_globals<D> g) {
 
     load(cos_reg, g.cos, {0, 0, n, 0});
     load(sin_reg, g.sin, {0, 0, n, 0});
+    load(x_reg, g.x, {b, h, n, 0});
     asm volatile("s_waitcnt lgkmcnt(0)");
-
-    constexpr int n_heads = ATTN_H/NUM_WORKERS;
-    #pragma unroll
-    for (int head = 0; head < n_heads; head++) {
-        load(x_reg, g.x, {b, (head*NUM_WORKERS)+warpid, n, 0});
-        asm volatile("s_waitcnt lgkmcnt(0)");
-        apply_rotary_embedding<D>(x_reg, cos_reg, sin_reg);
-        store(g.o, x_reg, {b, (head*NUM_WORKERS)+warpid, n, 0}); 
-    }
+    apply_rotary_embedding<D>(x_reg, cos_reg, sin_reg);
+    store(g.o, x_reg, {b, h, n, 0}); 
 }
 
 template<int D>
