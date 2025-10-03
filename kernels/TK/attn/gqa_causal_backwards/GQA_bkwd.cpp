@@ -1,17 +1,19 @@
 #include "kittens.cuh"
 #include "pyutils/pyutils.cuh"
 
-constexpr int ATTN_B = 16; // batch size
-constexpr int ATTN_H_Q = 64; // number of query heads
-constexpr int ATTN_H_KV = 8; // number of key/value heads (for GQA)
+constexpr int ATTN_B = 1; // batch size
+constexpr int ATTN_H_Q = 1; // number of query heads
+constexpr int ATTN_H_KV = 1; // number of key/value heads (for GQA)
 constexpr int GROUP_SIZE = ATTN_H_Q / ATTN_H_KV; // queries per KV head group
-constexpr int ATTN_N = 1024; // sequence length
+constexpr int ATTN_N = 256; // sequence length
 constexpr int ATTN_D = 128; // dimension
 constexpr int STEP_QO = 64; // block size for QO
 constexpr int BLOCK_SIZE_KV = 256; // block size for KV
 constexpr int SLICE_QO = 32;
 constexpr int DOT_SLICE_QO = 16;
 constexpr int WARP_SIZE_KV = 32; // warp size for KV
+
+constexpr bool causal = true;
 
 #define NUM_WARPS 8
 #define NUM_THREADS (kittens::WARP_THREADS * NUM_WARPS)
@@ -22,14 +24,16 @@ using namespace kittens;
 
 template<int D, typename T=bf16, typename L=row_l, typename M=mfma_16x16x32> using qo_tile = rt<T, DOT_SLICE_QO, D, L, M>;
 template<int D, typename T=bf16, typename L=row_l, typename M=mfma_16x16x32> using kv_tile = rt<T, WARP_SIZE_KV, D, L, M>;
-template<int D, typename T=bf16, typename L=row_l, typename M=mfma_16x16x32> using qo_tile_T_dq = rt<T, 16, 16, L, M>;
-template<int D, typename T=bf16, typename L=row_l, typename M=mfma_16x16x32> using qo_tile_dq = rt<T, 16, 16, L, M>;
+template< typename T=bf16, typename L=row_l, typename M=mfma_16x16x32> using qo_tile_T_dq = rt<T, 16, 16, L, M>;
+template<typename T=bf16, typename L=row_l, typename M=mfma_16x16x32> using qo_tile_dq = rt<T, 16, 16, L, M>;
 template<int D, typename T=bf16, typename L=row_l, typename M=mfma_16x16x32> using kv_tile_T = rt<T, D, WARP_SIZE_KV, L, M>;
-template<int D, typename T=float, typename L=accum_col_l, typename M=mfma_16x16x32> using attn_tile = rt<T, DOT_SLICE_QO, WARP_SIZE_KV, L, M>;
-template<int D, typename T=bf16, typename L=col_l, typename M=mfma_16x16x32> using attn_tile_T = rt<T, WARP_SIZE_KV, DOT_SLICE_QO, L, M>;
+template<typename T=float, typename L=accum_col_l, typename M=mfma_16x16x32> using attn_tile = rt<T, DOT_SLICE_QO, WARP_SIZE_KV, L, M>;
+template<typename T=bf16, typename L=col_l, typename M=mfma_16x16x32> using attn_tile_T = rt<T, WARP_SIZE_KV, DOT_SLICE_QO, L, M>;
 
-template<int D, typename T=bf16, typename L=col_l, typename M=mfma_16x16x32> using attn_tile_T_dq = rt<T, 256, 16, L, M>;
-template<int D, typename T=bf16, typename L=row_l, typename M=mfma_16x16x32> using kv_tile_dq = rt<T, 256, 16, L, M>;
+template<typename T=bf16, typename L=col_l, typename M=mfma_16x16x32> using attn_tile_T_dq = rt<T, 256, 16, L, M>;
+template<typename T=bf16, typename L=row_l, typename M=mfma_16x16x32> using kv_tile_dq = rt<T, 256, 16, L, M>;
+
+/*------------------------------------------------------------------------------------------------*/
 
 template<int D> struct attn_prep_globals { 
     gl<bf16, -1, -1, -1, -1> Og;
@@ -71,6 +75,40 @@ void dispatch_prep(attn_prep_globals<D> g) {
     attend_prep_ker<D><<<g.grid(), g.block(), mem_size>>>(g);
     hipDeviceSynchronize();
 }
+
+/*------------------------------------------------------------------------------------------------*/
+
+template<int D> struct attn_dq_shuffle_globals { 
+    gl<bf16, -1, -1, -1, -1> dQg_in, dQg_out;
+    dim3 grid() { return dim3(ATTN_B, ATTN_H_Q, ATTN_N / (DOT_SLICE_QO * NUM_WARPS)); }
+    dim3 block() { return dim3(NUM_THREADS); }
+    size_t dynamic_shared_memory() { return MAX_SHARED_MEMORY; }
+};
+
+template<int D> __launch_bounds__(NUM_THREADS, 1)
+__global__ void attend_dq_shuffle_ker(const attn_dq_shuffle_globals<D> g) {
+    
+    const int batch_idx = blockIdx.x;
+    const int q_head_idx = blockIdx.y; // Using Q head index for dQ shuffle
+    const int seq_idx = blockIdx.z;
+
+    const int warpid = kittens::warpid();
+
+    qo_tile<D, bf16, accum_row_l> dQg;
+
+    load_shuffled<2>(dQg, g.dQg_in, {batch_idx, q_head_idx, seq_idx * NUM_WARPS + warpid, 0});
+    store<1>(g.dQg_out, dQg, {batch_idx, seq_idx * NUM_WARPS + warpid, q_head_idx, 0});
+}
+
+template<int D>
+void dispatch_dq_shuffle(attn_dq_shuffle_globals<D> g) {
+    unsigned long mem_size = g.dynamic_shared_memory();
+    hipFuncSetAttribute((void*)attend_dq_shuffle_ker<D>, hipFuncAttributeMaxDynamicSharedMemorySize, mem_size);
+    attend_dq_shuffle_ker<D><<<g.grid(), g.block(), mem_size>>>(g);
+    hipDeviceSynchronize();
+}
+
+/*------------------------------------------------------------------------------------------------*/
 
 template<int D> struct attn_bwd_combined_globals { 
     gl<bf16, -1, -1, -1, -1> Q, K, V, O;
@@ -312,50 +350,61 @@ __device__ inline static void load_shuffled(RT &dst, const GL &src, const COORD 
 
 /*------------------------------------------------------------------------------------------------*/
 
-// For backward pass: P_ij has shape DOT_SLICE_QO x WARP_SIZE_KV
-// This is attn_tile<D> = rt<float, DOT_SLICE_QO, WARP_SIZE_KV, accum_col_l>
+// RT is rt<float, DOT_SLICE_QO /*=16*/, WARP_SIZE_KV /*=32*/, accum_col_l>
+// laid out as tiles[i][j] with j ∈ {0,1} each 16×16.
 template<ducks::rt::accumulator_col_layout RT>
 __device__ inline void mask_causal_q_kv_accum_col(
     RT &dst,
     int q_abs,
     int k_abs,
-    const typename base_types::packing<typename RT::dtype>::unpacked_type &neg_inf
+    const typename base_types::packing<typename RT::dtype>::unpacked_type &val
 ) {
-    // Whole tile checks
-    if (k_abs > q_abs + (DOT_SLICE_QO - 1)) { neg_infty(dst); return; } // whole future tile
-    if (k_abs + WARP_SIZE_KV - 1 <= q_abs) { return; }                   // whole past tile
+    // Whole-tile fast paths
+    if (k_abs > q_abs + (DOT_SLICE_QO - 1)) {          // entirely in the future
+        if constexpr (std::is_same_v<typename RT::dtype,float>) {
+            if (val == 0.0f) { zero(dst); } 
+            else { neg_infty(dst); }
+        } else { 
+            zero(dst); 
+        }  // or neg_infty for other dtypes if needed
+        return;
+    }
+    if (k_abs + WARP_SIZE_KV - 1 <= q_abs) return;     // entirely in the past
 
-    const int lane = laneid();
-    const int col = lane & 31;   // query column (0-31, maps to DOT_SLICE_QO positions)
-    const int ro = lane >> 5;    // row-block selector (0 or 1)
+    const int lane = kittens::laneid();
+    const int col16 = lane & 15;    // column inside the 16-wide sub-tile
+    const int ro    = lane >> 4;    // 0 or 1: which 8-row half (rows 0..7 or 8..15)
 
     #pragma unroll
-    for (int i = 0; i < dst.height; ++i) {      // i steps rows by 32
-        const int base32 = i * 32;
+    for (int i = 0; i < dst.height; ++i) {
+        const int base16 = i * 16;  // row block stride
+
         #pragma unroll
-        for (int j = 0; j < dst.width; ++j) {
-            #pragma unroll
-            for (int ii = 0; ii < 4; ++ii) {
-                const int rbase = base32 + ii*8 + ro*4;  // row within K tile (0-31 for WARP_SIZE_KV)
+        for (int j = 0; j < dst.width; ++j) {          // j = 0 (cols 0..15), j = 1 (cols 16..31)
+            const int col_abs = j * 16 + col16;
 
-                auto &d0 = dst.tiles[i][j].data[ii*2];
-                auto &d1 = dst.tiles[i][j].data[ii*2 + 1];
+            // This lane owns 4 rows in this 16-row block at that column.
+            // Rows are contiguous within the half selected by 'ro'.
+            const int r0 = base16 + ro*8 + 0;
+            const int r1 = base16 + ro*8 + 1;
+            const int r2 = base16 + ro*8 + 2;
+            const int r3 = base16 + ro*8 + 3;
 
-                // For backward: each element is [q_pos, k_pos], mask if k_pos > q_pos
-                // But the tile is transposed in memory (accum_col_l means K is in rows, Q is in cols)
-                if (k_abs + (rbase + 0) > q_abs + col) d0.x = neg_inf;
-                if (k_abs + (rbase + 1) > q_abs + col) d0.y = neg_inf;
-                if (k_abs + (rbase + 2) > q_abs + col) d1.x = neg_inf;
-                if (k_abs + (rbase + 3) > q_abs + col) d1.y = neg_inf;
-            }
+            auto &d0 = dst.tiles[i][j].data[0];  // .x, .y
+            auto &d1 = dst.tiles[i][j].data[1];  // .x, .y
+
+            if (k_abs + col_abs > q_abs + r0) d0.x = val;
+            if (k_abs + col_abs > q_abs + r1) d0.y = val;
+            if (k_abs + col_abs > q_abs + r2) d1.x = val;
+            if (k_abs + col_abs > q_abs + r3) d1.y = val;
         }
     }
 }
 
+
 template<typename AT>
-__device__ inline void mask_backward_tile(AT &A, int q_abs_start, int k_abs_start) {
-    mask_causal_q_kv_accum_col(A, q_abs_start, k_abs_start,
-        kittens::base_types::constants<float>::neg_infty());
+__device__ inline void mask_backward_tile(AT &A, int q_abs_start, int k_abs_start, float val) {
+    mask_causal_q_kv_accum_col(A, q_abs_start, k_abs_start, val);
 }
 
 template<int D> __launch_bounds__(NUM_THREADS, 1)
@@ -370,12 +419,9 @@ __global__ void attend_bwd_combined_ker(const attn_bwd_combined_globals<D> g) {
     const int j = seq_idx * NUM_WARPS + warpid;
     const int stagger = warpid / 4;
     
-
-    const bool causal = true;
-    const int num_steps_per_head = ATTN_N / STEP_QO;
-    const int num_steps = num_steps_per_head * GROUP_SIZE;
+    const int num_steps_per_head = ATTN_N / STEP_QO; // 4
+    const int num_steps = num_steps_per_head * GROUP_SIZE; // 4
     const float scale_factor = 1.0f / sqrt(D);
-
 
     // Shared tiles
     extern __shared__ alignment_dummy __shm[];
@@ -391,23 +437,23 @@ __global__ void attend_bwd_combined_ker(const attn_bwd_combined_globals<D> g) {
 
     // Register tiles
     kv_tile<D, bf16, row_l, mfma_16x16x32> K_j, V_j;
-    kv_tile_dq<D, bf16, col_l> K_j_col; // for dq
-    qo_tile_T_dq<D, float, accum_col_l> dQ_i_T; // for dq
+    kv_tile_dq<bf16, col_l> K_j_col; // for dq
+    qo_tile_T_dq<float, accum_col_l> dQ_i_T; // for dq
     kv_tile_T<D, float, accum_col_l, mfma_32x32x16> dK_j_T, dV_j_T;
     qo_tile<D, bf16, row_l, mfma_16x16x32> Q_i, dO_i;
     qo_tile<D, bf16, col_l, mfma_32x32x16> Q_i_col, dO_i_col;
-    qo_tile_dq<D, float, accum_row_l> dQ_i;
-    attn_tile<D, float, accum_col_l, mfma_16x16x32>::col_vec L_i, delta_i;
+    qo_tile_dq<float, accum_row_l> dQ_i;
+    attn_tile<float, accum_col_l, mfma_16x16x32>::col_vec L_i, delta_i;
 
-    attn_tile<D, float, accum_col_l> P_ij;
-    attn_tile<D, bf16, accum_col_l> P_ij_bf16;
-    attn_tile<D, float, accum_col_l> dP_ij;
-    attn_tile<D, bf16, accum_col_l> dP_ij_bf16;
-    attn_tile_T<D, bf16, accum_row_l> dP_ij_bf16_accum_row;
+    attn_tile<float, accum_col_l> P_ij;
+    attn_tile<bf16, accum_col_l> P_ij_bf16;
+    attn_tile<float, accum_col_l> dP_ij;
+    attn_tile<bf16, accum_col_l> dP_ij_bf16;
+    attn_tile_T<bf16, accum_row_l> dP_ij_bf16_accum_row;
 
-    attn_tile<D, bf16, col_l, mfma_32x32x16> P_ij_bf16_col;
-    attn_tile<D, bf16, col_l, mfma_32x32x16> dP_ij_bf16_col;
-    attn_tile_T_dq<D, bf16, col_l> dP_ij_bf16_col_T; // for dq
+    attn_tile<bf16, col_l, mfma_32x32x16> P_ij_bf16_col;
+    attn_tile<bf16, col_l, mfma_32x32x16> dP_ij_bf16_col;
+    attn_tile_T_dq<bf16, col_l> dP_ij_bf16_col_T; // for dq
 
     int tic = 0, toc = 1;
     // Load KV data using the KV head index
@@ -425,10 +471,6 @@ __global__ void attend_bwd_combined_ker(const attn_bwd_combined_globals<D> g) {
     G::load<1, false>(dO_i_smem[tic][0], g.dOg, {batch_idx, 0, first_q_head, 0});
     G::load<1, false>(Q_i_smem[tic][1], g.Q, {batch_idx, 1, first_q_head, 0});
     G::load<1, false>(dO_i_smem[tic][1], g.dOg, {batch_idx, 1, first_q_head, 0});
-    // __builtin_amdgcn_s_waitcnt(0);
-    // __builtin_amdgcn_s_barrier();
-    // __builtin_amdgcn_sched_barrier(0);
-    // load(K_j_col, subtile_inplace<256, 16>(K_j_smem, {0, warpid}));
     __builtin_amdgcn_s_waitcnt(0);
     __builtin_amdgcn_s_barrier();
     __builtin_amdgcn_sched_barrier(0);
@@ -437,9 +479,11 @@ __global__ void attend_bwd_combined_ker(const attn_bwd_combined_globals<D> g) {
         __builtin_amdgcn_s_barrier();
     }
 
+    int condition = (laneid() == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0);
+
     // 8. Process all query heads in this KV group
     // 9. for 1 <= i <= T_r (1024 / 32 = 32)  
-    for (int i = 0; i < num_steps - 1; ++i, tic ^= 1, toc ^= 1) {
+    for (int i = 0; i < num_steps; ++i, tic ^= 1, toc ^= 1) {
         const int q_head_idx = i / num_steps_per_head + first_q_head;
         const int q_seq_idx = i % num_steps_per_head;
         const int next_q_head_idx = (i + 1) / num_steps_per_head + first_q_head;
@@ -460,13 +504,17 @@ __global__ void attend_bwd_combined_ker(const attn_bwd_combined_globals<D> g) {
             zero(P_ij);
             mma_ABt(P_ij, Q_i, K_j, P_ij);
             mul(P_ij, P_ij, scale_factor);
+
+            int q_abs_start = q_seq_idx * STEP_QO;  // Dot slice 0 offset
+            int k_abs_start = j * WARP_SIZE_KV;
             if (causal) {
-                int q_abs_start = q_seq_idx * STEP_QO + 0;  // Dot slice 0 offset
-                int k_abs_start = j * WARP_SIZE_KV;
-                mask_backward_tile(P_ij, q_abs_start, k_abs_start);
+                mask_backward_tile(P_ij, q_abs_start, k_abs_start, kittens::base_types::constants<float>::neg_infty());
             }
             sub_row(P_ij, P_ij, L_i);
             exp(P_ij, P_ij);
+            if (causal) {
+                mask_backward_tile(P_ij, q_abs_start, k_abs_start, 0.0f);  // Sets to 0.0
+            }
             copy(P_ij_bf16, P_ij);
             __builtin_amdgcn_s_setprio(0);
             __builtin_amdgcn_s_barrier();
@@ -476,7 +524,6 @@ __global__ void attend_bwd_combined_ker(const attn_bwd_combined_globals<D> g) {
             // 14. dS_ij = P_ij o (dP_ij - delta_i)
             load(delta_i, subvec_inplace<DOT_SLICE_QO>(delta_smem[tic], 0));
             load(dO_i, subtile_inplace<DOT_SLICE_QO, D>(dO_i_smem[tic][0], {0, 0}));
-            // load(K_j_col, subtile_inplace<256, 16>(K_j_smem, {0, warpid}));
             asm volatile("s_waitcnt lgkmcnt(0)");
             __builtin_amdgcn_s_barrier();
             __builtin_amdgcn_sched_barrier(0);
@@ -488,14 +535,19 @@ __global__ void attend_bwd_combined_ker(const attn_bwd_combined_globals<D> g) {
             mul(dP_ij, dP_ij, scale_factor);
             sub_row(dP_ij, dP_ij, delta_i);
             mul(dP_ij, dP_ij, P_ij);
+            if (causal) {
+                mask_backward_tile(dP_ij, q_abs_start, k_abs_start, 0.0f);
+            }
             copy(dP_ij_bf16, dP_ij);
             swap_layout_and_transpose(dP_ij_bf16_accum_row, dP_ij_bf16);
             __builtin_amdgcn_s_setprio(0);
             __builtin_amdgcn_s_barrier();
             __builtin_amdgcn_sched_barrier(0);
 
-            load(L_smem[toc], g.L_vec, {batch_idx, next_q_head_idx, 0, next_q_seq_idx});
-            G::load<1, false>(Q_i_smem[toc][0], g.Q, {batch_idx, next_q_seq_idx * 2, next_q_head_idx, 0});
+            if (i < num_steps - 1) {
+                load(L_smem[toc], g.L_vec, {batch_idx, next_q_head_idx, 0, next_q_seq_idx});
+                G::load<1, false>(Q_i_smem[toc][0], g.Q, {batch_idx, next_q_seq_idx * 2, next_q_head_idx, 0});
+            }
             auto attn_i_smem_subtile = subtile_inplace<WARP_SIZE_KV, DOT_SLICE_QO>(attn_i_smem, {warpid, 0});
             store(attn_i_smem_subtile, dP_ij_bf16_accum_row);
             load(dO_i_col, subtile_inplace<DOT_SLICE_QO, D>(dO_i_smem[tic][0], {0, 0}));
@@ -546,13 +598,17 @@ __global__ void attend_bwd_combined_ker(const attn_bwd_combined_globals<D> g) {
             zero(P_ij);
             mma_ABt(P_ij, Q_i, K_j, P_ij);
             mul(P_ij, P_ij, scale_factor);
+
+            int q_abs_start = q_seq_idx * STEP_QO + DOT_SLICE_QO;  // Dot slice 0 offset
+            int k_abs_start = j * WARP_SIZE_KV;
             if (causal) {
-                int q_abs_start = q_seq_idx * STEP_QO + DOT_SLICE_QO;  // Dot slice 0 offset
-                int k_abs_start = j * WARP_SIZE_KV;
-                mask_backward_tile(P_ij, q_abs_start, k_abs_start);
+                mask_backward_tile(P_ij, q_abs_start, k_abs_start, kittens::base_types::constants<float>::neg_infty());
             }
             sub_row(P_ij, P_ij, L_i);
             exp(P_ij, P_ij);
+            if (causal) {
+                mask_backward_tile(P_ij, q_abs_start, k_abs_start, 0.0);  // Sets to 0.0
+            }
             copy(P_ij_bf16, P_ij);
             __builtin_amdgcn_s_setprio(0);
             __builtin_amdgcn_s_barrier();
@@ -574,14 +630,19 @@ __global__ void attend_bwd_combined_ker(const attn_bwd_combined_globals<D> g) {
             mul(dP_ij, dP_ij, scale_factor);
             sub_row(dP_ij, dP_ij, delta_i);
             mul(dP_ij, dP_ij, P_ij);
+            if (causal) {
+                mask_backward_tile(dP_ij, q_abs_start, k_abs_start, 0.0f);
+            }
             copy(dP_ij_bf16, dP_ij);
             swap_layout_and_transpose(dP_ij_bf16_accum_row, dP_ij_bf16);
             __builtin_amdgcn_s_setprio(0);
             __builtin_amdgcn_s_barrier();
             __builtin_amdgcn_sched_barrier(0);
 
-            load(delta_smem[toc], g.delta_vec, {batch_idx, next_q_head_idx, 0, next_q_seq_idx});
-            G::load<1, false>(dO_i_smem[toc][0], g.dOg, {batch_idx, next_q_seq_idx * 2, next_q_head_idx, 0});
+            if (i < num_steps - 1) {
+                load(delta_smem[toc], g.delta_vec, {batch_idx, next_q_head_idx, 0, next_q_seq_idx});
+                G::load<1, false>(dO_i_smem[toc][0], g.dOg, {batch_idx, next_q_seq_idx * 2, next_q_head_idx, 0});
+            }
             auto attn_i_smem_subtile = subtile_inplace<WARP_SIZE_KV, DOT_SLICE_QO>(attn_i_smem, {warpid, 0});
             store(attn_i_smem_subtile, dP_ij_bf16_accum_row); // bank conflicts
             load(dO_i_col, subtile_inplace<DOT_SLICE_QO, D>(dO_i_smem[tic][0], {1, 0}));
@@ -632,13 +693,17 @@ __global__ void attend_bwd_combined_ker(const attn_bwd_combined_globals<D> g) {
             zero(P_ij);
             mma_ABt(P_ij, Q_i, K_j, P_ij);
             mul(P_ij, P_ij, scale_factor);
+
+            int q_abs_start = q_seq_idx * STEP_QO + 2 * DOT_SLICE_QO;  // Dot slice 0 offset
+            int k_abs_start = j * WARP_SIZE_KV;
             if (causal) {
-                int q_abs_start = q_seq_idx * STEP_QO + 2 * DOT_SLICE_QO;  // Dot slice 0 offset
-                int k_abs_start = j * WARP_SIZE_KV;
-                mask_backward_tile(P_ij, q_abs_start, k_abs_start);
+                mask_backward_tile(P_ij, q_abs_start, k_abs_start, kittens::base_types::constants<float>::neg_infty());
             }
             sub_row(P_ij, P_ij, L_i);
             exp(P_ij, P_ij);
+            if (causal) {
+                mask_backward_tile(P_ij, q_abs_start, k_abs_start, 0.0);  // Sets to 0.0
+            }
             copy(P_ij_bf16, P_ij);
             __builtin_amdgcn_s_setprio(0);
             __builtin_amdgcn_s_barrier();
@@ -660,13 +725,18 @@ __global__ void attend_bwd_combined_ker(const attn_bwd_combined_globals<D> g) {
             mul(dP_ij, dP_ij, scale_factor);
             sub_row(dP_ij, dP_ij, delta_i);
             mul(dP_ij, dP_ij, P_ij);
+            if (causal) {
+                mask_backward_tile(dP_ij, q_abs_start, k_abs_start, 0.0f);
+            }
             copy(dP_ij_bf16, dP_ij);
             swap_layout_and_transpose(dP_ij_bf16_accum_row, dP_ij_bf16);
             __builtin_amdgcn_s_setprio(0);
             __builtin_amdgcn_s_barrier();
             __builtin_amdgcn_sched_barrier(0);
 
-            G::load<1, false>(Q_i_smem[toc][1], g.Q, {batch_idx, next_q_seq_idx * 2 + 1, next_q_head_idx, 0});
+            if (i < num_steps - 1) {
+                G::load<1, false>(Q_i_smem[toc][1], g.Q, {batch_idx, next_q_seq_idx * 2 + 1, next_q_head_idx, 0});
+            }
             auto attn_i_smem_subtile = subtile_inplace<WARP_SIZE_KV, DOT_SLICE_QO>(attn_i_smem, {warpid, 0});
             store(attn_i_smem_subtile, dP_ij_bf16_accum_row);
             load(dO_i_col, subtile_inplace<DOT_SLICE_QO, D>(dO_i_smem[tic][1], {0, 0}));
@@ -717,13 +787,17 @@ __global__ void attend_bwd_combined_ker(const attn_bwd_combined_globals<D> g) {
             zero(P_ij);
             mma_ABt(P_ij, Q_i, K_j, P_ij);
             mul(P_ij, P_ij, scale_factor);
+
+            int q_abs_start = q_seq_idx * STEP_QO + 3 * DOT_SLICE_QO;  // Dot slice 0 offset
+            int k_abs_start = j * WARP_SIZE_KV;
             if (causal) {
-                int q_abs_start = q_seq_idx * STEP_QO + 3 * DOT_SLICE_QO;  // Dot slice 0 offset
-                int k_abs_start = j * WARP_SIZE_KV;
-                mask_backward_tile(P_ij, q_abs_start, k_abs_start);
+                mask_backward_tile(P_ij, q_abs_start, k_abs_start, kittens::base_types::constants<float>::neg_infty());
             }
             sub_row(P_ij, P_ij, L_i);
             exp(P_ij, P_ij);
+            if (causal) {
+                mask_backward_tile(P_ij, q_abs_start, k_abs_start, 0.0);  // Sets to 0.0
+            }
             copy(P_ij_bf16, P_ij);
             __builtin_amdgcn_s_setprio(0);
             __builtin_amdgcn_s_barrier();
@@ -745,13 +819,18 @@ __global__ void attend_bwd_combined_ker(const attn_bwd_combined_globals<D> g) {
             mul(dP_ij, dP_ij, scale_factor);
             sub_row(dP_ij, dP_ij, delta_i);
             mul(dP_ij, dP_ij, P_ij);
+            if (causal) {
+                mask_backward_tile(dP_ij, q_abs_start, k_abs_start, 0.0f);
+            }
             copy(dP_ij_bf16, dP_ij);
             swap_layout_and_transpose(dP_ij_bf16_accum_row, dP_ij_bf16);
             __builtin_amdgcn_s_setprio(0);
             __builtin_amdgcn_s_barrier();
             __builtin_amdgcn_sched_barrier(0);
 
-            G::load<1, false>(dO_i_smem[toc][1], g.dOg, {batch_idx, next_q_seq_idx * 2 + 1, next_q_head_idx, 0});
+            if (i < num_steps - 1) {
+                G::load<1, false>(dO_i_smem[toc][1], g.dOg, {batch_idx, next_q_seq_idx * 2 + 1, next_q_head_idx, 0});
+            }
             auto attn_i_smem_subtile = subtile_inplace<WARP_SIZE_KV, DOT_SLICE_QO>(attn_i_smem, {warpid, 0});
             store(attn_i_smem_subtile, dP_ij_bf16_accum_row);
             load(dO_i_col, subtile_inplace<DOT_SLICE_QO, D>(dO_i_smem[tic][1], {1, 0}));
@@ -789,324 +868,6 @@ __global__ void attend_bwd_combined_ker(const attn_bwd_combined_globals<D> g) {
         }
     }
 
-    // // Epilogue
-    // // dot slice 0
-    // {
-    //     load(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}));
-    //     load(Q_i, subtile_inplace<DOT_SLICE_QO, D>(Q_i_smem[tic][0], {0, 0}));
-    //     load(L_i, subvec_inplace<DOT_SLICE_QO>(L_smem[tic], 0));
-    //     asm volatile("s_waitcnt lgkmcnt(0)");
-    //     __builtin_amdgcn_s_barrier();
-    //     __builtin_amdgcn_sched_barrier(0);
-
-    //     // 10. S_ij = Q_i K_j^T * scale
-    //     // 11. P_ij = exp(S_ij - L_i)
-    //     __builtin_amdgcn_s_setprio(1);
-    //     zero(P_ij);
-    //     mma_ABt(P_ij, Q_i, K_j, P_ij);
-    //     mul(P_ij, P_ij, scale_factor);
-    //     sub_row(P_ij, P_ij, L_i);
-    //     exp(P_ij, P_ij);
-    //     copy(P_ij_bf16, P_ij);
-    //     __builtin_amdgcn_s_setprio(0);
-    //     __builtin_amdgcn_s_barrier();
-    //     __builtin_amdgcn_sched_barrier(0);
-
-    //     // 13. dP_ij = dO_i @ V_j^T
-    //     // 14. dS_ij = P_ij o (dP_ij - delta_i)
-    //     load(delta_i, subvec_inplace<DOT_SLICE_QO>(delta_smem[tic], 0));
-    //     load(dO_i, subtile_inplace<DOT_SLICE_QO, D>(dO_i_smem[tic][0], {0, 0}));
-    //     // load(K_j_col, subtile_inplace<256, 16>(K_j_smem, {0, warpid}));
-    //     asm volatile("s_waitcnt lgkmcnt(0)");
-    //     __builtin_amdgcn_s_barrier();
-    //     __builtin_amdgcn_sched_barrier(0);
-
-    //     __builtin_amdgcn_s_setprio(1);
-    //     zero(dP_ij);
-    //     mul(delta_i, delta_i, scale_factor); // really weird compiler lifetime thing
-    //     mma_ABt(dP_ij, dO_i, V_j, dP_ij);
-    //     mul(dP_ij, dP_ij, scale_factor);
-    //     sub_row(dP_ij, dP_ij, delta_i);
-    //     mul(dP_ij, dP_ij, P_ij);
-    //     copy(dP_ij_bf16, dP_ij);
-    //     swap_layout_and_transpose(dP_ij_bf16_accum_row, dP_ij_bf16);
-    //     __builtin_amdgcn_s_setprio(0);
-    //     __builtin_amdgcn_s_barrier();
-    //     __builtin_amdgcn_sched_barrier(0);
-
-    //     auto attn_i_smem_subtile = subtile_inplace<WARP_SIZE_KV, DOT_SLICE_QO>(attn_i_smem, {warpid, 0});
-    //     store(attn_i_smem_subtile, dP_ij_bf16_accum_row);
-    //     load(dO_i_col, subtile_inplace<DOT_SLICE_QO, D>(dO_i_smem[tic][0], {0, 0}));
-    //     load(Q_i_col, subtile_inplace<DOT_SLICE_QO, D>(Q_i_smem[tic][0], {0, 0}));
-    //     asm volatile("s_waitcnt lgkmcnt(0)");
-    //     __builtin_amdgcn_s_barrier();
-    //     __builtin_amdgcn_sched_barrier(0);
-
-    //     // 12. dV_j += P_ij^T @ dO_i
-    //     // 16. dK_j += dS_ij^T @ Q_i   (128x64)=(128x16)x(16x64)
-    //     __builtin_amdgcn_s_setprio(1);
-    //     P_ij_bf16_col = swap_layout_inplace<col_l, mfma_32x32x16>(P_ij_bf16);
-    //     mma_AtB(dV_j_T, dO_i_col, P_ij_bf16_col, dV_j_T);
-    //     dP_ij_bf16_col = swap_layout_inplace<col_l, mfma_32x32x16>(dP_ij_bf16);
-    //     mma_AtB(dK_j_T, Q_i_col, dP_ij_bf16_col, dK_j_T);
-    //     __builtin_amdgcn_s_setprio(0);
-    //     __builtin_amdgcn_s_barrier();
-    //     __builtin_amdgcn_sched_barrier(0);
-
-    //     // 15. dQ_i += dS_ij @ K_j (32x16)=(32x256)x(256x16)
-    //     load(dP_ij_bf16_col_T, attn_i_smem);
-    //     load(K_j_col, subtile_inplace<256, 16>(K_j_smem, {0, warpid}));
-    //     asm volatile("s_waitcnt lgkmcnt(0)");
-    //     __builtin_amdgcn_s_barrier();
-    //     __builtin_amdgcn_sched_barrier(0);
-
-    //     __builtin_amdgcn_s_setprio(1);
-    //     zero(dQ_i_T);
-    //     mma_AtB(dQ_i_T, K_j_col, dP_ij_bf16_col_T,  dQ_i_T);
-    //     swap_layout_and_transpose(dQ_i, dQ_i_T);
-    //     atomic_pk_add_bf16_with_warpid<2>(g.dQg, dQ_i, {batch_idx, first_q_head + GROUP_SIZE - 1, (num_steps_per_head - 1) * 4, 0}, warpid);
-    //     __builtin_amdgcn_s_setprio(0);
-    //     __builtin_amdgcn_s_barrier();
-    //     __builtin_amdgcn_sched_barrier(0);
-    // }
-    // // dot slice 1
-    // {
-    //     load(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}));
-    //     load(Q_i, subtile_inplace<DOT_SLICE_QO, D>(Q_i_smem[tic][0], {1, 0}));
-    //     load(L_i, subvec_inplace<DOT_SLICE_QO>(L_smem[tic], 1));
-    //     asm volatile("s_waitcnt lgkmcnt(0)");
-    //     __builtin_amdgcn_s_barrier();
-    //     __builtin_amdgcn_sched_barrier(0);
-
-    //     // 10. S_ij = Q_i K_j^T * scale
-    //     // 11. P_ij = exp(S_ij - L_i)
-    //     __builtin_amdgcn_s_setprio(1);
-    //     zero(P_ij);
-    //     mma_ABt(P_ij, Q_i, K_j, P_ij);
-    //     mul(P_ij, P_ij, scale_factor);
-    //     sub_row(P_ij, P_ij, L_i);
-    //     exp(P_ij, P_ij);
-    //     copy(P_ij_bf16, P_ij);
-    //     __builtin_amdgcn_s_setprio(0);
-    //     __builtin_amdgcn_s_barrier();
-    //     __builtin_amdgcn_sched_barrier(0);
-
-    //     load(delta_i, subvec_inplace<DOT_SLICE_QO>(delta_smem[tic], 1));
-    //     load(dO_i, subtile_inplace<DOT_SLICE_QO, D>(dO_i_smem[tic][0], {1, 0}));
-    //     // load(K_j_col, subtile_inplace<256, 16>(K_j_smem, {0, warpid}));
-    //     asm volatile("s_waitcnt lgkmcnt(0)");
-    //     __builtin_amdgcn_s_barrier();
-    //     __builtin_amdgcn_sched_barrier(0);
-
-    //     // 13. dP_ij = dO_i @ V_j^T
-    //     // 14. dS_ij = P_ij o (dP_ij - delta_i)
-    //     __builtin_amdgcn_s_setprio(1);
-    //     zero(dP_ij);
-    //     mul(delta_i, delta_i, scale_factor); // really weird compiler lifetime thing
-    //     mma_ABt(dP_ij, dO_i, V_j, dP_ij);
-    //     mul(dP_ij, dP_ij, scale_factor);
-    //     sub_row(dP_ij, dP_ij, delta_i);
-    //     mul(dP_ij, dP_ij, P_ij);
-    //     copy(dP_ij_bf16, dP_ij);
-    //     swap_layout_and_transpose(dP_ij_bf16_accum_row, dP_ij_bf16);
-    //     __builtin_amdgcn_s_setprio(0);
-    //     __builtin_amdgcn_s_barrier();
-    //     __builtin_amdgcn_sched_barrier(0);
-
-    //     auto attn_i_smem_subtile = subtile_inplace<WARP_SIZE_KV, DOT_SLICE_QO>(attn_i_smem, {warpid, 0});
-    //     store(attn_i_smem_subtile, dP_ij_bf16_accum_row);
-    //     load(dO_i_col, subtile_inplace<DOT_SLICE_QO, D>(dO_i_smem[tic][0], {1, 0}));
-    //     load(Q_i_col, subtile_inplace<DOT_SLICE_QO, D>(Q_i_smem[tic][0], {1, 0}));
-    //     asm volatile("s_waitcnt lgkmcnt(0)");
-    //     __builtin_amdgcn_s_barrier();
-    //     __builtin_amdgcn_sched_barrier(0);
-        
-    //     // 12. dV_j += P_ij^T @ dO_i
-    //     // 16. dK_j += dS_ij^T @ Q_i   (128x64)=(128x16)x(16x64)
-    //     __builtin_amdgcn_s_setprio(1);
-    //     P_ij_bf16_col = swap_layout_inplace<col_l, mfma_32x32x16>(P_ij_bf16);
-    //     mma_AtB(dV_j_T, dO_i_col, P_ij_bf16_col, dV_j_T);
-    //     dP_ij_bf16_col = swap_layout_inplace<col_l, mfma_32x32x16>(dP_ij_bf16);
-    //     mma_AtB(dK_j_T, Q_i_col, dP_ij_bf16_col, dK_j_T);
-    //     __builtin_amdgcn_s_setprio(0);
-    //     __builtin_amdgcn_s_barrier();
-    //     __builtin_amdgcn_sched_barrier(0);
-
-    //     // 15. dQ_i += dS_ij @ K_j (32x16)=(32x256)x(256x16)
-    //     load(dP_ij_bf16_col_T, attn_i_smem);
-    //     load(K_j_col, subtile_inplace<256, 16>(K_j_smem, {0, warpid}));
-    //     asm volatile("s_waitcnt lgkmcnt(0)");
-    //     __builtin_amdgcn_s_barrier();
-    //     __builtin_amdgcn_sched_barrier(0);
-
-    //     __builtin_amdgcn_s_setprio(1);
-    //     zero(dQ_i_T);
-    //     mma_AtB(dQ_i_T, K_j_col, dP_ij_bf16_col_T,  dQ_i_T);
-    //     swap_layout_and_transpose(dQ_i, dQ_i_T);
-    //     atomic_pk_add_bf16_with_warpid<2>(g.dQg, dQ_i, {batch_idx, first_q_head + GROUP_SIZE - 1, (num_steps_per_head - 1) * 4 + 1, 0}, warpid);
-    //     __builtin_amdgcn_s_setprio(0);
-    //     __builtin_amdgcn_s_barrier();
-    //     __builtin_amdgcn_sched_barrier(0);
-    // }
-    // // dot slice 2
-    // {
-    //     load(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}));
-    //     load(Q_i, subtile_inplace<DOT_SLICE_QO, D>(Q_i_smem[tic][1], {0, 0}));
-    //     load(L_i, subvec_inplace<DOT_SLICE_QO>(L_smem[tic], 2));
-    //     asm volatile("s_waitcnt lgkmcnt(0)");
-    //     __builtin_amdgcn_s_barrier();
-    //     __builtin_amdgcn_sched_barrier(0);
-
-    //     // 10. S_ij = Q_i K_j^T * scale
-    //     // 11. P_ij = exp(S_ij - L_i)
-    //     __builtin_amdgcn_s_setprio(1);
-    //     zero(P_ij);
-    //     mma_ABt(P_ij, Q_i, K_j, P_ij);
-    //     mul(P_ij, P_ij, scale_factor);
-    //     sub_row(P_ij, P_ij, L_i);
-    //     exp(P_ij, P_ij);
-    //     copy(P_ij_bf16, P_ij);
-    //     __builtin_amdgcn_s_setprio(0);
-    //     __builtin_amdgcn_s_barrier();
-    //     __builtin_amdgcn_sched_barrier(0);
-
-    //     // 13. dP_ij = dO_i @ V_j^T
-    //     // 14. dS_ij = P_ij o (dP_ij - delta_i)
-    //     load(delta_i, subvec_inplace<DOT_SLICE_QO>(delta_smem[tic], 2));
-    //     load(dO_i, subtile_inplace<DOT_SLICE_QO, D>(dO_i_smem[tic][1], {0, 0}));
-    //     // load(K_j_col, subtile_inplace<256, 16>(K_j_smem, {0, warpid}));
-    //     asm volatile("s_waitcnt lgkmcnt(0)");
-    //     __builtin_amdgcn_s_barrier();
-    //     __builtin_amdgcn_sched_barrier(0);
-
-    //     __builtin_amdgcn_s_setprio(1);
-    //     zero(dP_ij);
-    //     mul(delta_i, delta_i, scale_factor); // really weird compiler lifetime thing
-    //     mma_ABt(dP_ij, dO_i, V_j, dP_ij);
-    //     mul(dP_ij, dP_ij, scale_factor);
-    //     sub_row(dP_ij, dP_ij, delta_i);
-    //     mul(dP_ij, dP_ij, P_ij);
-    //     copy(dP_ij_bf16, dP_ij);
-    //     swap_layout_and_transpose(dP_ij_bf16_accum_row, dP_ij_bf16);
-    //     __builtin_amdgcn_s_setprio(0);
-    //     __builtin_amdgcn_s_barrier();
-    //     __builtin_amdgcn_sched_barrier(0);
-
-    //     auto attn_i_smem_subtile = subtile_inplace<WARP_SIZE_KV, DOT_SLICE_QO>(attn_i_smem, {warpid, 0});
-    //     store(attn_i_smem_subtile, dP_ij_bf16_accum_row);
-    //     load(dO_i_col, subtile_inplace<DOT_SLICE_QO, D>(dO_i_smem[tic][1], {0, 0}));
-    //     load(Q_i_col, subtile_inplace<DOT_SLICE_QO, D>(Q_i_smem[tic][1], {0, 0}));
-    //     asm volatile("s_waitcnt lgkmcnt(0)");
-    //     __builtin_amdgcn_s_barrier();
-    //     __builtin_amdgcn_sched_barrier(0);
-
-    //     // 12. dV_j += P_ij^T @ dO_i
-    //     // 16. dK_j += dS_ij^T @ Q_i   (128x64)=(128x16)x(16x64)
-    //     __builtin_amdgcn_s_setprio(1);
-    //     P_ij_bf16_col = swap_layout_inplace<col_l, mfma_32x32x16>(P_ij_bf16);
-    //     mma_AtB(dV_j_T, dO_i_col, P_ij_bf16_col, dV_j_T);
-    //     dP_ij_bf16_col = swap_layout_inplace<col_l, mfma_32x32x16>(dP_ij_bf16);
-    //     mma_AtB(dK_j_T, Q_i_col, dP_ij_bf16_col, dK_j_T);
-    //     __builtin_amdgcn_s_setprio(0);
-    //     __builtin_amdgcn_s_barrier();
-    //     __builtin_amdgcn_sched_barrier(0);
-
-    //     // 15. dQ_i += dS_ij @ K_j (32x16)=(32x256)x(256x16)
-    //     load(dP_ij_bf16_col_T, attn_i_smem);
-    //     load(K_j_col, subtile_inplace<256, 16>(K_j_smem, {0, warpid}));
-    //     asm volatile("s_waitcnt lgkmcnt(0)");
-    //     __builtin_amdgcn_s_barrier();
-    //     __builtin_amdgcn_sched_barrier(0);
-
-    //     __builtin_amdgcn_s_setprio(1);
-    //     zero(dQ_i_T);
-    //     mma_AtB(dQ_i_T, K_j_col, dP_ij_bf16_col_T,  dQ_i_T);
-    //     swap_layout_and_transpose(dQ_i, dQ_i_T);
-    //     atomic_pk_add_bf16_with_warpid<2>(g.dQg, dQ_i, {batch_idx, first_q_head + GROUP_SIZE - 1, (num_steps_per_head - 1) * 4 + 2, 0}, warpid);
-    //     __builtin_amdgcn_s_setprio(0);
-    //     __builtin_amdgcn_s_barrier();
-    //     __builtin_amdgcn_sched_barrier(0);
-    // }
-    // // dot slice 3
-    // {
-    //     load(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}));
-    //     load(Q_i, subtile_inplace<DOT_SLICE_QO, D>(Q_i_smem[tic][1], {1, 0}));
-    //     load(L_i, subvec_inplace<DOT_SLICE_QO>(L_smem[tic], 3));
-    //     asm volatile("s_waitcnt lgkmcnt(0)");
-    //     __builtin_amdgcn_s_barrier();
-    //     __builtin_amdgcn_sched_barrier(0);
-
-    //     // 10. S_ij = Q_i K_j^T * scale
-    //     // 11. P_ij = exp(S_ij - L_i)
-    //     __builtin_amdgcn_s_setprio(1);
-    //     zero(P_ij);
-    //     mma_ABt(P_ij, Q_i, K_j, P_ij);
-    //     mul(P_ij, P_ij, scale_factor);
-    //     sub_row(P_ij, P_ij, L_i);
-    //     exp(P_ij, P_ij);
-    //     copy(P_ij_bf16, P_ij);
-    //     __builtin_amdgcn_s_setprio(0);
-    //     __builtin_amdgcn_s_barrier();
-    //     __builtin_amdgcn_sched_barrier(0);
-
-    //     load(delta_i, subvec_inplace<DOT_SLICE_QO>(delta_smem[tic], 3));
-    //     load(dO_i, subtile_inplace<DOT_SLICE_QO, D>(dO_i_smem[tic][1], {1, 0}));
-    //     // load(K_j_col, subtile_inplace<256, 16>(K_j_smem, {0, warpid}));
-    //     asm volatile("s_waitcnt lgkmcnt(0)");
-    //     __builtin_amdgcn_s_barrier();
-    //     __builtin_amdgcn_sched_barrier(0);
-
-    //     // 13. dP_ij = dO_i @ V_j^T
-    //     // 14. dS_ij = P_ij o (dP_ij - delta_i)
-    //     __builtin_amdgcn_s_setprio(1);
-    //     zero(dP_ij);
-    //     mul(delta_i, delta_i, scale_factor); // really weird compiler lifetime thing
-    //     mma_ABt(dP_ij, dO_i, V_j, dP_ij);
-    //     mul(dP_ij, dP_ij, scale_factor);
-    //     sub_row(dP_ij, dP_ij, delta_i);
-    //     mul(dP_ij, dP_ij, P_ij);
-    //     copy(dP_ij_bf16, dP_ij);
-    //     swap_layout_and_transpose(dP_ij_bf16_accum_row, dP_ij_bf16);
-    //     __builtin_amdgcn_s_setprio(0);
-    //     __builtin_amdgcn_s_barrier();
-    //     __builtin_amdgcn_sched_barrier(0);
-
-    //     auto attn_i_smem_subtile = subtile_inplace<WARP_SIZE_KV, DOT_SLICE_QO>(attn_i_smem, {warpid, 0});
-    //     store(attn_i_smem_subtile, dP_ij_bf16_accum_row);
-    //     load(dO_i_col, subtile_inplace<DOT_SLICE_QO, D>(dO_i_smem[tic][1], {1, 0}));
-    //     load(Q_i_col, subtile_inplace<DOT_SLICE_QO, D>(Q_i_smem[tic][1], {1, 0}));
-    //     asm volatile("s_waitcnt lgkmcnt(0)");
-    //     __builtin_amdgcn_s_barrier();
-    //     __builtin_amdgcn_sched_barrier(0);
-        
-    //     // 12. dV_j += P_ij^T @ dO_i
-    //     // 16. dK_j += dS_ij^T @ Q_i   (128x64)=(128x16)x(16x64)
-    //     __builtin_amdgcn_s_setprio(1);
-    //     P_ij_bf16_col = swap_layout_inplace<col_l, mfma_32x32x16>(P_ij_bf16);
-    //     mma_AtB(dV_j_T, dO_i_col, P_ij_bf16_col, dV_j_T);
-    //     dP_ij_bf16_col = swap_layout_inplace<col_l, mfma_32x32x16>(dP_ij_bf16);
-    //     mma_AtB(dK_j_T, Q_i_col, dP_ij_bf16_col, dK_j_T);
-    //     __builtin_amdgcn_s_setprio(0);
-    //     __builtin_amdgcn_s_barrier();
-    //     __builtin_amdgcn_sched_barrier(0);
-
-    //     // 15. dQ_i += dS_ij @ K_j (32x16)=(32x256)x(256x16)
-    //     load(dP_ij_bf16_col_T, attn_i_smem);
-    //     load(K_j_col, subtile_inplace<256, 16>(K_j_smem, {0, warpid}));
-    //     __builtin_amdgcn_s_waitcnt(0);
-    //     __builtin_amdgcn_s_barrier();
-    //     __builtin_amdgcn_sched_barrier(0);
-
-    //     __builtin_amdgcn_s_setprio(1);
-    //     zero(dQ_i_T);
-    //     mma_AtB(dQ_i_T, K_j_col, dP_ij_bf16_col_T,  dQ_i_T);
-    //     swap_layout_and_transpose(dQ_i, dQ_i_T);
-    //     atomic_pk_add_bf16_with_warpid<2>(g.dQg, dQ_i, {batch_idx, first_q_head + GROUP_SIZE - 1, (num_steps_per_head - 1) * 4 + 3, 0}, warpid);
-    //     __builtin_amdgcn_s_setprio(0);
-    //     __builtin_amdgcn_s_barrier();
-    //     __builtin_amdgcn_sched_barrier(0);
-    // }
-
     if (!stagger) {
         __builtin_amdgcn_s_barrier();
     }
@@ -1123,36 +884,6 @@ void dispatch_bwd_combined(attn_bwd_combined_globals<D> g) {
     unsigned long mem_size = g.dynamic_shared_memory();
     hipFuncSetAttribute((void*)attend_bwd_combined_ker<D>, hipFuncAttributeMaxDynamicSharedMemorySize, mem_size);
     attend_bwd_combined_ker<D><<<g.grid(), g.block(), mem_size>>>(g);
-    hipDeviceSynchronize();
-}
-
-template<int D> struct attn_dq_shuffle_globals { 
-    gl<bf16, -1, -1, -1, -1> dQg_in, dQg_out;
-    dim3 grid() { return dim3(ATTN_B, ATTN_H_Q, ATTN_N / (DOT_SLICE_QO * NUM_WARPS)); }
-    dim3 block() { return dim3(NUM_THREADS); }
-    size_t dynamic_shared_memory() { return MAX_SHARED_MEMORY; }
-};
-
-template<int D> __launch_bounds__(NUM_THREADS, 1)
-__global__ void attend_dq_shuffle_ker(const attn_dq_shuffle_globals<D> g) {
-    
-    const int batch_idx = blockIdx.x;
-    const int q_head_idx = blockIdx.y; // Using Q head index for dQ shuffle
-    const int seq_idx = blockIdx.z;
-
-    const int warpid = kittens::warpid();
-
-    qo_tile<D, bf16, accum_row_l> dQg;
-
-    load_shuffled<2>(dQg, g.dQg_in, {batch_idx, q_head_idx, seq_idx * NUM_WARPS + warpid, 0});
-    store<1>(g.dQg_out, dQg, {batch_idx, seq_idx * NUM_WARPS + warpid, q_head_idx, 0});
-}
-
-template<int D>
-void dispatch_dq_shuffle(attn_dq_shuffle_globals<D> g) {
-    unsigned long mem_size = g.dynamic_shared_memory();
-    hipFuncSetAttribute((void*)attend_dq_shuffle_ker<D>, hipFuncAttributeMaxDynamicSharedMemorySize, mem_size);
-    attend_dq_shuffle_ker<D><<<g.grid(), g.block(), mem_size>>>(g);
     hipDeviceSynchronize();
 }
 

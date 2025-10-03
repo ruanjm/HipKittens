@@ -17,11 +17,11 @@ torch.set_printoptions(
 
 
 causal = True
-b = 16
-h_q = 64  # number of query heads  
-h_kv = 8  # number of key/value heads (for GQA)
+b = 1
+h_q = 1  # number of query heads  
+h_kv = 1  # number of key/value heads (for GQA)
 group_size = h_q // h_kv  # queries per KV head group
-n = 1024
+n = 256
 d = 128
 dtype = torch.bfloat16
 mean = 10
@@ -83,11 +83,13 @@ def simple_flash_backward(Q, K, V, dO, m, l, causal=False):
     # Zero out masked positions to avoid nan
     if causal:
         P = P.masked_fill(causal_mask, 0.0)
+
+    # breakpoint()
     
     O = torch.matmul(P, V_expanded)
 
     # dV - need to sum across grouped heads
-    dV_expanded = torch.matmul(P.transpose(-2, -1), dO)  # (B, h_q, N, D)
+    dV_expanded = torch.matmul(P.transpose(-2, -1), dO) # (B, hq, N, D)
     dV = torch.zeros_like(V)
     for i in range(h_kv):
         start_idx = i * group_size
@@ -95,16 +97,16 @@ def simple_flash_backward(Q, K, V, dO, m, l, causal=False):
         dV[:, i, :, :] = dV_expanded[:, start_idx:end_idx, :, :].sum(dim=1)
 
     # softmax backward
-    Delta = (dO * O).sum(dim=-1, keepdim=True)                 # (B, h_q, N, 1)
-    dS = P * (torch.matmul(dO, V_expanded.transpose(-2, -1)) - Delta)   # (B, h_q, N, N)
+    Delta = (dO * O).sum(dim=-1, keepdim=True)   # (B, hq, N, 1)
+    dS = P * (torch.matmul(dO, V_expanded.transpose(-2, -1)) - Delta) # (B, hq, N, N)
     # Apply causal mask to gradients
     if causal:
         dS = dS.masked_fill(causal_mask, 0.0)
 
     # chain rule through S = (Q K^T) * scale
-    dQ = torch.matmul(dS, K_expanded) * scale  # (B, h_q, N, D)
+    dQ = torch.matmul(dS, K_expanded) * scale # (B, hq, N, D)
     # dK - need to sum across grouped heads
-    dK_expanded = torch.matmul(dS.transpose(-2, -1), Q) * scale  # (B, h_q, N, D)
+    dK_expanded = torch.matmul(dS.transpose(-2, -1), Q) * scale # (B, hq, N, D)
     dK = torch.zeros_like(K)
     for i in range(h_kv):
         start_idx = i * group_size
@@ -245,34 +247,45 @@ tk_kernel_bkwd.dispatch_dq_shuffle(
     dQ_tk
 )
 
+# breakpoint()
+
 L_tk = L_tk.transpose(-1, -2).contiguous()
 
 # **************************************************
 # Comparisons
 # **************************************************
 
+dQ_simple = dQ_tiled.transpose(1, 2).contiguous()
+dK_simple = dK_tiled.transpose(1, 2).contiguous()
+dV_simple = dV_tiled.transpose(1, 2).contiguous()
+
 num_print = 8
+num_print_seq = 2
 
-# TK vs AITER
-print(f"\nTK vs AITER comparison:")
-print("\nO outputs:")
-print("TK: ", O_tk[0, 0, :num_print, 0], "Max:", O_tk.max().item())
-print("AITER: ", out_aiter_bnhd[0, 0, :num_print, 0], "Max:", out_aiter_bnhd.max().item())
+# # TK vs AITER
+# print(f"\nTK vs AITER comparison:")
+# print(f"\nO outputs ({O_tk.shape}):")
+# print("TK: ", O_tk[0, 0, :num_print, 0], "Max:", O_tk.max().item())
+# print("AITER: ", out_aiter_bnhd[0, 0, :num_print, 0], "Max:", out_aiter_bnhd.max().item())
+# print("Simple: ", O_tiled[0, 0, :num_print, 0], "Max:", O_tiled.max().item())
+
+# print()
+# print(f"\nGradient K outputs ({dK_tk.shape}):")
+# print("TK: ", dK_tk[0, 0:num_print_seq, 0, :num_print], "Max:", dK_tk.max().item())
+# print("AITER: ", k_grad_aiter_bnhd[0, 0:num_print_seq, 0, :num_print], "Max:", k_grad_aiter_bnhd.max().item())
+# print("Simple: ", dK_simple[0, 0:num_print_seq, 0, :num_print], "Max:", dK_simple.max().item())
+
+# print()
+# print(f"Gradient V outputs ({dV_tk.shape}):")
+# print("TK: ", dV_tk[0, 0:num_print_seq, 0, :num_print], "Max:", dV_tk.max().item())
+# print("AITER: ", v_grad_aiter_bnhd[0, 0:num_print_seq, 0, :num_print], "Max:", v_grad_aiter_bnhd.max().item())
+# print("Simple: ", dV_simple[0, 0:num_print_seq, 0, :num_print], "Max:", dV_simple.max().item())
 
 print()
-print("\nGradient K outputs:")
-print("TK: ", dK_tk[0, 0, 0, :num_print], "Max:", dK_tk.max().item())
-print("AITER: ", k_grad_aiter_bnhd[0, 0, 0, :num_print], "Max:", k_grad_aiter_bnhd.max().item())
-
-print()
-print("Gradient V outputs:")
-print("TK: ", dV_tk[0, 0, 0, :num_print], "Max:", dV_tk.max().item())
-print("AITER: ", v_grad_aiter_bnhd[0, 0, 0, :num_print], "Max:", v_grad_aiter_bnhd.max().item())
-
-print()
-print("Gradient Q outputs:")
-print("TK: ", dQ_tk[0, 0, 0, :num_print], "Max:", dQ_tk.max().item())
-print("AITER: ", q_grad_aiter_bnhd[0, 0, 0, :num_print], "Max:", q_grad_aiter_bnhd.max().item())
+print(f"Gradient Q outputs ({dQ_tk.shape}):")
+print("TK: ", dQ_tk[0, 0:num_print_seq, 0, :num_print], "Max:", dQ_tk.max().item())
+print("AITER: ", q_grad_aiter_bnhd[0, 0:num_print_seq, 0, :num_print], "Max:", q_grad_aiter_bnhd.max().item())
+print("Simple: ", dQ_simple[0, 0:num_print_seq, 0, :num_print], "Max:", dQ_simple.max().item())
 
 # **************************************************
 # TK vs AITER (robust tolerances & metrics)
@@ -287,24 +300,20 @@ print(f"O: max_abs={o_diff.max().item():.6f}, max_rel={o_rel_error:.4f}, "
 # **************************************************
 # Gradient comparisons
 # **************************************************
-print(f"\nTK vs AITER:") 
-q_diff, q_err_cnt, q_total, q_rel_error, q_l2_error, q_cos, q_mask = robustness_check(q_grad_aiter_bnhd, dQ_tk)
-k_diff, k_err_cnt, k_total, k_rel_error, k_l2_error, k_cos, k_mask = robustness_check(k_grad_aiter_bnhd, dK_tk)
-v_diff, v_err_cnt, v_total, v_rel_error, v_l2_error, v_cos, v_mask = robustness_check(v_grad_aiter_bnhd, dV_tk)
-print(f"Q grad: max_abs={q_diff.max().item():.6f}, max_rel={q_rel_error:.4f}, "
-        f"rel_l2={q_l2_error:.4f}, cos={q_cos:.6f}, "
-      f"errors={q_err_cnt}/{q_total} ({100*q_err_cnt/q_total:.4f}%)")
-print(f"K grad: max_abs={k_diff.max().item():.6f}, max_rel={k_rel_error:.4f}, "
-      f"rel_l2={k_l2_error:.4f}, cos={k_cos:.6f}, "
-      f"errors={k_err_cnt}/{k_total} ({100*k_err_cnt/k_total:.4f}%)")
-print(f"V grad: max_abs={v_diff.max().item():.6f}, max_rel={v_rel_error:.4f}, "
-      f"rel_l2={v_l2_error:.4f}, cos={v_cos:.6f}, "
-      f"errors={v_err_cnt}/{v_total} ({100*v_err_cnt/v_total:.4f}%)")
+# print(f"\nTK vs AITER:") 
+# q_diff, q_err_cnt, q_total, q_rel_error, q_l2_error, q_cos, q_mask = robustness_check(q_grad_aiter_bnhd, dQ_tk)
+# k_diff, k_err_cnt, k_total, k_rel_error, k_l2_error, k_cos, k_mask = robustness_check(k_grad_aiter_bnhd, dK_tk)
+# v_diff, v_err_cnt, v_total, v_rel_error, v_l2_error, v_cos, v_mask = robustness_check(v_grad_aiter_bnhd, dV_tk)
+# print(f"Q grad: max_abs={q_diff.max().item():.6f}, max_rel={q_rel_error:.4f}, "
+#         f"rel_l2={q_l2_error:.4f}, cos={q_cos:.6f}, "
+#       f"errors={q_err_cnt}/{q_total} ({100*q_err_cnt/q_total:.4f}%)")
+# print(f"K grad: max_abs={k_diff.max().item():.6f}, max_rel={k_rel_error:.4f}, "
+#       f"rel_l2={k_l2_error:.4f}, cos={k_cos:.6f}, "
+#       f"errors={k_err_cnt}/{k_total} ({100*k_err_cnt/k_total:.4f}%)")
+# print(f"V grad: max_abs={v_diff.max().item():.6f}, max_rel={v_rel_error:.4f}, "
+#       f"rel_l2={v_l2_error:.4f}, cos={v_cos:.6f}, "
+#       f"errors={v_err_cnt}/{v_total} ({100*v_err_cnt/v_total:.4f}%)")
 
-
-dQ_simple = dQ_tiled.transpose(1, 2).contiguous()
-dK_simple = dK_tiled.transpose(1, 2).contiguous()
-dV_simple = dV_tiled.transpose(1, 2).contiguous()
 print(f"\nAITER vs. simple comparison:")
 q_diff, q_err_cnt, q_total, q_rel_error, q_l2_error, q_cos, q_mask = robustness_check(q_grad_aiter_bnhd, dQ_simple)
 k_diff, k_err_cnt, k_total, k_rel_error, k_l2_error, k_cos, k_mask = robustness_check(k_grad_aiter_bnhd, dK_simple)
@@ -334,4 +343,14 @@ print(f"V grad: max_abs={v_diff.max().item():.6f}, max_rel={v_rel_error:.4f}, "
       f"rel_l2={v_l2_error:.4f}, cos={v_cos:.6f}, "
       f"errors={v_err_cnt}/{v_total} ({100*v_err_cnt/v_total:.4f}%)")
 
+
+print(f"{q_diff[0,:4].max().item()=}") 
+print(f"{q_diff[0,4:8].max().item()=}") 
+print(f"{q_diff[0,8:12].max().item()=}") 
+print(f"{q_diff[0,12:16].max().item()=}") 
+print(f"{q_diff[0,16:20].max().item()=}") 
+print(f"{q_diff[0,20:24].max().item()=}") 
+print(f"{q_diff[0,24:28].max().item()=}") 
+print(f"{q_diff[0,28:32].max().item()=}") 
+print(f"{q_diff[0,32:36].max().item()=}") 
 
