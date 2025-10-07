@@ -11,7 +11,6 @@
 namespace kittens {
 
 
-#ifdef KITTENS_CDNA4
 __device__ static inline void mfma161632(      float2 (&D)[2],
                                          const half_2 (&A)[4],
                                          const half_2 (&B)[4],
@@ -70,31 +69,6 @@ __device__ static inline void mfma323216(      float2 (&D)[8],
         0, 0, 0
     );
 }
-#else
-__device__ static inline void mfma161616(      float2 (&D)[2],
-                                         const half_2 (&A)[2],
-                                         const half_2 (&B)[2],
-                                         const float2 (&C)[2]) {
-    (*(float4*)D).data = {__builtin_amdgcn_mfma_f32_16x16x16f16(
-        (*(short4*)A).data,
-        (*(short4*)B).data,
-        (*(float4*)C).data,
-        0, 0, 0
-    )};
-}
-
-__device__ static inline void mfma161616(      float2 (&D)[2],
-                                         const bf16_2 (&A)[2],
-                                         const bf16_2 (&B)[2],
-                                         const float2 (&C)[2]) {
-    (*(float4*)D).data = {__builtin_amdgcn_mfma_f32_16x16x16bf16_1k(
-        (*(short4*)A).data,
-        (*(short4*)B).data,
-        (*(float4*)C).data,
-        0, 0, 0
-    )};
-}
-#endif
 
 
 /**
@@ -108,57 +82,38 @@ __device__ static inline void mfma161616(      float2 (&D)[2],
  * @param[in] b The second input rt_base<bf16_2, col_layout> matrix in column-major mode.
  * @param[in] c The input rt_base<float2, row_layout> accumulator matrix.
  */
-#ifdef KITTENS_CDNA4
-__device__ static inline void mma_AB_base(rt_base<float, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_16x16x32> &d,
-                                    const rt_base<half, ducks::rt_layout::row, ducks::rt_matrix::mfma_16x16x32> &a,
-                                    const rt_base<half, ducks::rt_layout::col, ducks::rt_matrix::mfma_16x16x32> &b, // in col-major mode
-                                    const rt_base<float, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_16x16x32> &c) {
-    mfma161632(d.data, a.data, b.data, c.data);
+template<ducks::rt_shape::all D_shape, ducks::rt_shape::all A_shape, ducks::rt_shape::all B_shape, ducks::rt_shape::all C_shape>
+__device__ static inline void mma_AB_base(rt_base<float, ducks::rt_layout::col, D_shape> &d,
+                                        const rt_base<bf16, ducks::rt_layout::row, A_shape> &a,
+                                        const rt_base<bf16, ducks::rt_layout::col, B_shape> &b, // in col-major mode
+                                        const rt_base<float, ducks::rt_layout::col, C_shape> &c) {
+
+    static_assert(std::is_same_v<D_shape, C_shape>, "D and C must have the same shape");
+
+    constexpr int A_rows = A_shape::rows;
+    constexpr int A_cols = A_shape::cols;
+    constexpr int B_rows = B_shape::rows;
+    constexpr int B_cols = B_shape::cols;
+
+    constexpr int A_stride = A_shape::stride;
+    constexpr int B_stride = B_shape::stride;
+    static_assert(A_stride == B_stride, "A and B must have the same stride");
+    
+    if constexpr (std::is_same_v<D_shape, typename ducks::rt_shape::rt_16x16> && 
+                  A_rows == 16 && A_cols == 32 &&
+                  B_rows == 32 && B_cols == 16 &&
+                  std::is_same_v<C_shape, typename ducks::rt_shape::rt_16x16>) {
+        mfma161632(d.data, a.data, b.data, c.data);
+    } else if constexpr (std::is_same_v<D_shape, typename ducks::rt_shape::rt_32x32> && 
+                  A_rows == 32 && A_cols == 16 &&
+                  B_rows == 16 && B_cols == 32 &&
+                  std::is_same_v<C_shape, typename ducks::rt_shape::rt_32x32>) {
+        mfma323216(d.data, a.data, b.data, c.data);
+    } else {
+        static_assert(false, "Unsupported shape combination");
+    }
 }
-__device__ static inline void mma_AB_base(rt_base<float, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_16x16x32> &d,
-                                        const rt_base<bf16, ducks::rt_layout::row, ducks::rt_matrix::mfma_16x16x32> &a,
-                                        const rt_base<bf16, ducks::rt_layout::col, ducks::rt_matrix::mfma_16x16x32> &b, // in col-major mode
-                                        const rt_base<float, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_16x16x32> &c) {
-    mfma161632(d.data, a.data, b.data, c.data);
-}
-__device__ static inline void mma_AB_base(rt_base<float, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_32x32x16> &d,
-                                     const rt_base<half, ducks::rt_layout::row, ducks::rt_matrix::mfma_32x32x16> &a,
-                                     const rt_base<half, ducks::rt_layout::col, ducks::rt_matrix::mfma_32x32x16> &b, // in col-major mode
-                                     const rt_base<float, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_32x32x16> &c) {
-    mfma323216(d.data, a.data, b.data, c.data);
-}
-__device__ static inline void mma_AB_base(rt_base<float, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_32x32x16> &d,
-                                     const rt_base<bf16, ducks::rt_layout::row, ducks::rt_matrix::mfma_32x32x16> &a,
-                                     const rt_base<bf16, ducks::rt_layout::col, ducks::rt_matrix::mfma_32x32x16> &b, // in col-major mode
-                                     const rt_base<float, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_32x32x16> &c) {
-    mfma323216(d.data, a.data, b.data, c.data);
-}
-// __device__ static inline void mma_AB_base(rt_base<float, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_32x32x16> &d,
-//                                      const rt_base<half, ducks::rt_layout::accumulator_row, ducks::rt_matrix::mfma_32x32x16> &a,
-//                                      const rt_base<half, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_32x32x16> &b, // in col-major mode
-//                                      const rt_base<float, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_32x32x16> &c) {
-//     mfma323216(d.data, a.data, b.data, c.data);
-// }
-// __device__ static inline void mma_AB_base(rt_base<float, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_32x32x16> &d,
-//                                      const rt_base<bf16, ducks::rt_layout::accumulator_row, ducks::rt_matrix::mfma_32x32x16> &a,
-//                                      const rt_base<bf16, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_32x32x16> &b, // in col-major mode
-//                                      const rt_base<float, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_32x32x16> &c) {
-//     mfma323216(d.data, a.data, b.data, c.data);
-// }
-#else
-__device__ static inline void mma_AB_base(rt_base<float, ducks::rt_layout::col> &d,
-                                    const rt_base<half, ducks::rt_layout::row> &a,
-                                    const rt_base<half, ducks::rt_layout::col> &b, // in col-major mode
-                                    const rt_base<float, ducks::rt_layout::col> &c) {
-    mfma161616(d.data, a.data, b.data, c.data);
-}
-__device__ static inline void mma_AB_base(rt_base<float, ducks::rt_layout::col> &d,
-                                    const rt_base<bf16, ducks::rt_layout::row> &a,
-                                    const rt_base<bf16, ducks::rt_layout::col> &b, // in col-major mode
-                                    const rt_base<float, ducks::rt_layout::col> &c) {
-    mfma161616(d.data, a.data, b.data, c.data);
-}
-#endif
+
 /**
  * @brief Base dot product operation for row layout.
  *
@@ -170,57 +125,38 @@ __device__ static inline void mma_AB_base(rt_base<float, ducks::rt_layout::col> 
  * @param[in] b The second input rt_base<bf16_2, row_layout> matrix in row-major mode.
  * @param[in] c The input rt_base<float2, row_layout> accumulator matrix.
  */
-#ifdef KITTENS_CDNA4
-__device__ static inline void mma_ABt_base(rt_base<float, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_16x16x32> &d,
-    const rt_base<half, ducks::rt_layout::row, ducks::rt_matrix::mfma_16x16x32> &a,
-    const rt_base<half, ducks::rt_layout::row, ducks::rt_matrix::mfma_16x16x32> &b, // in row-major mode
-    const rt_base<float, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_16x16x32> &c) {
-    mfma161632(d.data, a.data, b.data, c.data);
+template<ducks::rt_shape::all D_shape, ducks::rt_shape::all A_shape, ducks::rt_shape::all B_shape, ducks::rt_shape::all C_shape>
+__device__ static inline void mma_ABt_base(rt_base<float, ducks::rt_layout::col, D_shape> &d,
+    const rt_base<bf16, ducks::rt_layout::row, A_shape> &a,
+    const rt_base<bf16, ducks::rt_layout::row, B_shape> &b, // in row-major mode
+    const rt_base<float, ducks::rt_layout::col, C_shape> &c) {
+
+    static_assert(std::is_same_v<D_shape, C_shape>, "D and C must have the same shape");
+
+    constexpr int A_rows = A_shape::rows;
+    constexpr int A_cols = A_shape::cols;
+    constexpr int B_rows = B_shape::rows;
+    constexpr int B_cols = B_shape::cols;
+
+    constexpr int A_stride = A_shape::stride;
+    constexpr int B_stride = B_shape::stride;
+    static_assert(A_stride == B_stride, "A and B must have the same stride");
+    
+    if constexpr (std::is_same_v<D_shape, typename ducks::rt_shape::rt_16x16> && 
+                  A_rows == 16 && A_cols == 32 &&
+                  B_rows == 16 && B_cols == 32 &&
+                  std::is_same_v<C_shape, typename ducks::rt_shape::rt_16x16>) {
+        mfma161632(d.data, a.data, b.data, c.data);
+    } else if constexpr (std::is_same_v<D_shape, typename ducks::rt_shape::rt_32x32> && 
+                  A_rows == 32 && A_cols == 16 &&
+                  B_rows == 32 && B_cols == 16 &&
+                  std::is_same_v<C_shape, typename ducks::rt_shape::rt_32x32>) {
+        mfma323216(d.data, a.data, b.data, c.data);
+    } else {
+        static_assert(false, "Unsupported shape combination");
+    }
 }
-__device__ static inline void mma_ABt_base(rt_base<float, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_16x16x32> &d,
-    const rt_base<bf16, ducks::rt_layout::row, ducks::rt_matrix::mfma_16x16x32> &a,
-    const rt_base<bf16, ducks::rt_layout::row, ducks::rt_matrix::mfma_16x16x32> &b, // in row-major mode
-    const rt_base<float, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_16x16x32> &c) {
-    mfma161632(d.data, a.data, b.data, c.data);
-}
-__device__ static inline void mma_ABt_base(rt_base<float, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_32x32x16> &d,
-                                     const rt_base<half, ducks::rt_layout::row, ducks::rt_matrix::mfma_32x32x16> &a,
-                                     const rt_base<half, ducks::rt_layout::row, ducks::rt_matrix::mfma_32x32x16> &b, // in row-major mode
-                                     const rt_base<float, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_32x32x16> &c) {
-    mfma323216(d.data, a.data, b.data, c.data);
-}
-__device__ static inline void mma_ABt_base(rt_base<float, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_32x32x16> &d,
-                                     const rt_base<bf16, ducks::rt_layout::row, ducks::rt_matrix::mfma_32x32x16> &a,
-                                     const rt_base<bf16, ducks::rt_layout::row, ducks::rt_matrix::mfma_32x32x16> &b, // in row-major mode
-                                     const rt_base<float, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_32x32x16> &c) {
-    mfma323216(d.data, a.data, b.data, c.data);
-}
-// __device__ static inline void mma_ABt_base(rt_base<float, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_32x32x16> &d,
-//                                      const rt_base<half, ducks::rt_layout::accumulator_row, ducks::rt_matrix::mfma_32x32x16> &a,
-//                                      const rt_base<half, ducks::rt_layout::accumulator_row, ducks::rt_matrix::mfma_32x32x16> &b, // in row-major mode
-//                                      const rt_base<float, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_32x32x16> &c) {
-//     mfma323216(d.data, a.data, b.data, c.data);
-// }
-// __device__ static inline void mma_ABt_base(rt_base<float, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_32x32x16> &d,
-//                                      const rt_base<bf16, ducks::rt_layout::accumulator_row, ducks::rt_matrix::mfma_32x32x16> &a,
-//                                      const rt_base<bf16, ducks::rt_layout::accumulator_row, ducks::rt_matrix::mfma_32x32x16> &b, // in row-major mode
-//                                      const rt_base<float, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_32x32x16> &c) {
-//     mfma323216(d.data, a.data, b.data, c.data);
-// }
-#else
-__device__ static inline void mma_ABt_base(rt_base<float, ducks::rt_layout::col> &d,
-                                     const rt_base<half, ducks::rt_layout::row> &a,
-                                     const rt_base<half, ducks::rt_layout::row> &b, // in row-major mode
-                                     const rt_base<float, ducks::rt_layout::col> &c) {
-    mfma161616(d.data, a.data, b.data, c.data);
-}
-__device__ static inline void mma_ABt_base(rt_base<float, ducks::rt_layout::col> &d,
-                                     const rt_base<bf16, ducks::rt_layout::row> &a,
-                                     const rt_base<bf16, ducks::rt_layout::row> &b, // in row-major mode
-                                     const rt_base<float, ducks::rt_layout::col> &c) {
-    mfma161616(d.data, a.data, b.data, c.data);
-}
-#endif
+
 /**
  * @brief Base matrix multiply-accumulate operation for row layout with transposed A.
  *
@@ -232,57 +168,37 @@ __device__ static inline void mma_ABt_base(rt_base<float, ducks::rt_layout::col>
  * @param[in] b The second input rt_base<bf16_2, col_layout> matrix in column-major mode.
  * @param[in] c The input rt_base<float2, row_layout> accumulator matrix.
  */
-#ifdef KITTENS_CDNA4
-__device__ static inline void mma_AtB_base(rt_base<float, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_16x16x32> &d,
-                                           const rt_base<half, ducks::rt_layout::col, ducks::rt_matrix::mfma_16x16x32> &a,
-                                           const rt_base<half, ducks::rt_layout::col, ducks::rt_matrix::mfma_16x16x32> &b, // in col-major mode
-                                           const rt_base<float, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_16x16x32> &c) {
-    mfma161632(d.data, a.data, b.data, c.data);
+template<ducks::rt_shape::all D_shape, ducks::rt_shape::all A_shape, ducks::rt_shape::all B_shape, ducks::rt_shape::all C_shape>
+__device__ static inline void mma_AtB_base(rt_base<float, ducks::rt_layout::col, D_shape> &d,
+                                           const rt_base<bf16, ducks::rt_layout::col, A_shape> &a,
+                                           const rt_base<bf16, ducks::rt_layout::col, B_shape> &b, // in col-major mode
+                                           const rt_base<float, ducks::rt_layout::col, C_shape> &c) {
+
+    static_assert(std::is_same_v<D_shape, C_shape>, "D and C must have the same shape");
+
+    constexpr int A_rows = A_shape::rows;
+    constexpr int A_cols = A_shape::cols;
+    constexpr int B_rows = B_shape::rows;
+    constexpr int B_cols = B_shape::cols;
+
+    constexpr int A_stride = A_shape::stride;
+    constexpr int B_stride = B_shape::stride;
+    static_assert(A_stride == B_stride, "A and B must have the same stride");
+    
+    if constexpr (std::is_same_v<D_shape, typename ducks::rt_shape::rt_16x16> && 
+                  A_rows == 32 && A_cols == 16 &&
+                  B_rows == 32 && B_cols == 16 &&
+                  std::is_same_v<C_shape, typename ducks::rt_shape::rt_16x16>) {
+        mfma161632(d.data, a.data, b.data, c.data);
+    } else if constexpr (std::is_same_v<D_shape, typename ducks::rt_shape::rt_32x32> && 
+                  A_rows == 16 && A_cols == 32 &&
+                  B_rows == 16 && B_cols == 32 &&
+                  std::is_same_v<C_shape, typename ducks::rt_shape::rt_32x32>) {
+        mfma323216(d.data, a.data, b.data, c.data);
+    } else {
+        static_assert(false, "Unsupported shape combination");
+    }
 }
-__device__ static inline void mma_AtB_base(rt_base<float, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_16x16x32> &d,
-                                           const rt_base<bf16, ducks::rt_layout::col, ducks::rt_matrix::mfma_16x16x32> &a,
-                                           const rt_base<bf16, ducks::rt_layout::col, ducks::rt_matrix::mfma_16x16x32> &b, // in col-major mode
-                                           const rt_base<float, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_16x16x32> &c) {
-    mfma161632(d.data, a.data, b.data, c.data);
-}
-__device__ static inline void mma_AtB_base(rt_base<float, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_32x32x16> &d,
-                                        const rt_base<half, ducks::rt_layout::col, ducks::rt_matrix::mfma_32x32x16> &a,
-                                        const rt_base<half, ducks::rt_layout::col, ducks::rt_matrix::mfma_32x32x16> &b, // in col-major mode
-                                        const rt_base<float, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_32x32x16> &c) {
-    mfma323216(d.data, a.data, b.data, c.data);
-}
-__device__ static inline void mma_AtB_base(rt_base<float, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_32x32x16> &d,
-                                        const rt_base<bf16, ducks::rt_layout::col, ducks::rt_matrix::mfma_32x32x16> &a,
-                                        const rt_base<bf16, ducks::rt_layout::col, ducks::rt_matrix::mfma_32x32x16> &b, // in col-major mode
-                                        const rt_base<float, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_32x32x16> &c) {
-    mfma323216(d.data, a.data, b.data, c.data);
-}
-// __device__ static inline void mma_AtB_base(rt_base<float, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_32x32x16> &d,
-//                                         const rt_base<half, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_32x32x16> &a,
-//                                         const rt_base<half, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_32x32x16> &b, // in col-major mode
-//                                         const rt_base<float, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_32x32x16> &c) {
-//     mfma323216(d.data, a.data, b.data, c.data);
-// }
-// __device__ static inline void mma_AtB_base(rt_base<float, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_32x32x16> &d,
-//                                         const rt_base<bf16, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_32x32x16> &a,
-//                                         const rt_base<bf16, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_32x32x16> &b, // in col-major mode
-//                                         const rt_base<float, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_32x32x16> &c) {
-//     mfma323216(d.data, a.data, b.data, c.data);
-// }
-#else
-__device__ static inline void mma_AtB_base(rt_base<float, ducks::rt_layout::col> &d,
-                                     const rt_base<half, ducks::rt_layout::col> &a,
-                                     const rt_base<half, ducks::rt_layout::col> &b, // in col-major mode
-                                     const rt_base<float, ducks::rt_layout::col> &c) {
-    mfma161616(d.data, a.data, b.data, c.data);
-}
-__device__ static inline void mma_AtB_base(rt_base<float, ducks::rt_layout::col> &d,
-                                     const rt_base<bf16, ducks::rt_layout::col> &a,
-                                     const rt_base<bf16, ducks::rt_layout::col> &b, // in col-major mode
-                                     const rt_base<float, ducks::rt_layout::col> &c) {
-    mfma161616(d.data, a.data, b.data, c.data);
-}
-#endif
 /**
  * @brief Base matrix multiply-accumulate operation for row layout with transposed A and B.
  *
@@ -294,57 +210,39 @@ __device__ static inline void mma_AtB_base(rt_base<float, ducks::rt_layout::col>
  * @param[in] b The second input rt_base<bf16_2, col_layout> matrix in column-major mode.
  * @param[in] c The input rt_base<float2, row_layout> accumulator matrix.
  */
-#ifdef KITTENS_CDNA4
-__device__ static inline void mma_AtBt_base(rt_base<float, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_16x16x32> &d,
-                                            const rt_base<half, ducks::rt_layout::col, ducks::rt_matrix::mfma_16x16x32> &a,
-                                            const rt_base<half, ducks::rt_layout::row, ducks::rt_matrix::mfma_16x16x32> &b, // in col-major mode
-                                            const rt_base<float, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_16x16x32> &c) {
-    mfma161632(d.data, a.data, b.data, c.data);
+template<ducks::rt_shape::all D_shape, ducks::rt_shape::all A_shape, ducks::rt_shape::all B_shape, ducks::rt_shape::all C_shape>
+__device__ static inline void mma_AtBt_base(rt_base<float, ducks::rt_layout::col, D_shape> &d,
+                                            const rt_base<bf16, ducks::rt_layout::col, A_shape> &a,
+                                            const rt_base<bf16, ducks::rt_layout::row, B_shape> &b, // in col-major mode
+                                            const rt_base<float, ducks::rt_layout::col, C_shape> &c) {
+
+    static_assert(std::is_same_v<D_shape, C_shape>, "D and C must have the same shape");
+
+    constexpr int A_rows = A_shape::rows;
+    constexpr int A_cols = A_shape::cols;
+    constexpr int B_rows = B_shape::rows;
+    constexpr int B_cols = B_shape::cols;
+
+    constexpr int A_stride = A_shape::stride;
+    constexpr int B_stride = B_shape::stride;
+    static_assert(A_stride == B_stride, "A and B must have the same stride");
+    
+    if constexpr (std::is_same_v<D_shape, typename ducks::rt_shape::rt_16x16> && 
+                  A_rows == 32 && A_cols == 16 &&
+                  B_rows == 16 && B_cols == 32 &&
+                  std::is_same_v<C_shape, typename ducks::rt_shape::rt_16x16>) {
+        mfma161632(d.data, a.data, b.data, c.data);
+    } else if constexpr (std::is_same_v<D_shape, typename ducks::rt_shape::rt_32x32> && 
+                  A_rows == 16 && A_cols == 32 &&
+                  B_rows == 32 && B_cols == 16 &&
+                  std::is_same_v<C_shape, typename ducks::rt_shape::rt_32x32>) {
+        mfma323216(d.data, a.data, b.data, c.data);
+    } else {
+        static_assert(false, "Unsupported shape combination");
+    }
+
 }
-__device__ static inline void mma_AtBt_base(rt_base<float, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_16x16x32> &d,
-                                            const rt_base<bf16, ducks::rt_layout::col, ducks::rt_matrix::mfma_16x16x32> &a,
-                                            const rt_base<bf16, ducks::rt_layout::row, ducks::rt_matrix::mfma_16x16x32> &b, // in col-major mode
-                                            const rt_base<float, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_16x16x32> &c) {
-    mfma161632(d.data, a.data, b.data, c.data);
-}
-__device__ static inline void mma_AtBt_base(rt_base<float, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_32x32x16> &d,
-                                        const rt_base<half, ducks::rt_layout::col, ducks::rt_matrix::mfma_32x32x16> &a,
-                                        const rt_base<half, ducks::rt_layout::row, ducks::rt_matrix::mfma_32x32x16> &b, // in col-major mode
-                                        const rt_base<float, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_32x32x16> &c) {
-    mfma323216(d.data, a.data, b.data, c.data);
-}
-__device__ static inline void mma_AtBt_base(rt_base<float, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_32x32x16> &d,
-                                        const rt_base<bf16, ducks::rt_layout::col, ducks::rt_matrix::mfma_32x32x16> &a,
-                                        const rt_base<bf16, ducks::rt_layout::row, ducks::rt_matrix::mfma_32x32x16> &b, // in col-major mode
-                                        const rt_base<float, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_32x32x16> &c) {
-    mfma323216(d.data, a.data, b.data, c.data);
-}
-// __device__ static inline void mma_AtBt_base(rt_base<float, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_32x32x16> &d,
-//                                         const rt_base<half, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_32x32x16> &a,
-//                                         const rt_base<half, ducks::rt_layout::accumulator_row, ducks::rt_matrix::mfma_32x32x16> &b, // in col-major mode
-//                                         const rt_base<float, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_32x32x16> &c) {
-//     mfma323216(d.data, a.data, b.data, c.data);
-// }
-// __device__ static inline void mma_AtBt_base(rt_base<float, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_32x32x16> &d,
-//                                         const rt_base<bf16, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_32x32x16> &a,
-//                                         const rt_base<bf16, ducks::rt_layout::accumulator_row, ducks::rt_matrix::mfma_32x32x16> &b, // in col-major mode
-//                                         const rt_base<float, ducks::rt_layout::accumulator_col, ducks::rt_matrix::mfma_32x32x16> &c) {
-//     mfma323216(d.data, a.data, b.data, c.data);
-// }
-#else
-__device__ static inline void mma_AtBt_base(rt_base<float, ducks::rt_layout::col> &d,
-                                      const rt_base<half, ducks::rt_layout::col> &a,
-                                      const rt_base<half, ducks::rt_layout::row> &b, // in col-major mode
-                                      const rt_base<float, ducks::rt_layout::col> &c) {
-    mfma161616(d.data, a.data, b.data, c.data);
-}
-__device__ static inline void mma_AtBt_base(rt_base<float, ducks::rt_layout::col> &d,
-                                      const rt_base<bf16, ducks::rt_layout::col> &a,
-                                      const rt_base<bf16, ducks::rt_layout::row> &b, // in col-major mode
-                                      const rt_base<float, ducks::rt_layout::col> &c) {
-    mfma161616(d.data, a.data, b.data, c.data);
-}
-#endif
+
 /**
  * @brief Matrix multiply-accumulate operation.
  *
@@ -359,11 +257,7 @@ __device__ static inline void mma_AtBt_base(rt_base<float, ducks::rt_layout::col
  * @param[in] b The second input rt_hf<K, M, col_layout> matrix in column-major mode.
  * @param[in] c The input rt_hf<N, M, row_layout> accumulator matrix.
  */
-#ifdef KITTENS_CDNA4
-template<ducks::rt::accumulator_col_layout D, ducks::rt::row_like A, ducks::rt::col_like B, ducks::rt::accumulator_col_layout C>
-#else
 template<ducks::rt::col_layout D, ducks::rt::row_layout A, ducks::rt::col_layout B, ducks::rt::col_layout C>
-#endif
 __device__ static inline void mma_AB(D &d,
                                const A &a,
                                const B &b,
@@ -416,11 +310,7 @@ __device__ static inline void mma_AB(D &d,
  * @param[in] b The second input rt_bf<M, K, row_layout> matrix in row-major mode.
  * @param[in] c The input rt_fl<N, M, row_layout> accumulator matrix.
  */
-#ifdef KITTENS_CDNA4
-template<ducks::rt::accumulator_col_layout D, ducks::rt::row_like A, ducks::rt::row_like B, ducks::rt::accumulator_col_layout C>
-#else
 template<ducks::rt::col_layout D, ducks::rt::row_layout A, ducks::rt::row_layout B, ducks::rt::col_layout C>
-#endif
 __device__ static inline void mma_ABt(D &d,
                                 const A &a,
                                 const B &b, // notice row and (M, K) instead of col and (K, M)
@@ -473,11 +363,7 @@ __device__ static inline void mma_ABt(D &d,
  * @param[in] b The second input rt_bf<K, M, col_layout> matrix in column-major mode.
  * @param[in] c The input rt_fl<N, M, row_layout> accumulator matrix.
  */
-#ifdef KITTENS_CDNA4
-template<ducks::rt::accumulator_col_layout D, ducks::rt::col_like A, ducks::rt::col_like B, ducks::rt::accumulator_col_layout C>
-#else
 template<ducks::rt::col_layout D, ducks::rt::col_layout A, ducks::rt::col_layout B, ducks::rt::col_layout C>
-#endif
 __device__ static inline void mma_AtB(D &d,
                                 const A &a,
                                 const B &b,
@@ -530,11 +416,7 @@ __device__ static inline void mma_AtB(D &d,
  * @param[in] b The second input rt_bf<M, K, row_layout> matrix in column-major mode.
  * @param[in] c The input rt_fl<N, M, row_layout> accumulator matrix.
  */
-#ifdef KITTENS_CDNA4
-template<ducks::rt::accumulator_col_layout D, ducks::rt::col_like A, ducks::rt::row_like B, ducks::rt::accumulator_col_layout C>
-#else
 template<ducks::rt::col_layout D, ducks::rt::col_layout A, ducks::rt::row_layout B, ducks::rt::col_layout C>
-#endif
 __device__ static inline void mma_AtBt(D &d,
                                  const A &a,
                                  const B &b,
