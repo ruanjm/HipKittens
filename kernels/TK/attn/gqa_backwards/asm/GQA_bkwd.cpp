@@ -145,58 +145,284 @@ __global__ void attend_bwd_combined_ker(const attn_bwd_combined_globals<D> g) {
     {
       load(L_smem[toc], g.L_vec, {batch_idx, next_q_head_idx, 0, next_q_seq_idx});
       G::load<1, false>(Q_i_smem[toc][0], g.Q, {batch_idx, next_q_seq_idx * 2, next_q_head_idx, 0});
-      load(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}));
-      load(Q_i, subtile_inplace<DOT_SLICE_QO, D>(Q_i_smem[tic][0], {0, 0}));
+
+      // Load Q_i from shared memory to registers
+      // load(Q_i, subtile_inplace<DOT_SLICE_QO, D>(Q_i_smem[tic][0], {0, 0}));
+      uint32_t Q_i_addr = get_address(Q_i, subtile_inplace<DOT_SLICE_QO, D>(Q_i_smem[tic][0], {0, 0}));
+      load<0, 0>(Q_i, subtile_inplace<DOT_SLICE_QO, D>(Q_i_smem[tic][0], {0, 0}), Q_i_addr);
+      load<0, 1>(Q_i, subtile_inplace<DOT_SLICE_QO, D>(Q_i_smem[tic][0], {0, 0}), Q_i_addr);
+      load<0, 2>(Q_i, subtile_inplace<DOT_SLICE_QO, D>(Q_i_smem[tic][0], {0, 0}), Q_i_addr);
+      load<0, 3>(Q_i, subtile_inplace<DOT_SLICE_QO, D>(Q_i_smem[tic][0], {0, 0}), Q_i_addr);
       load(L_i, subvec_inplace<DOT_SLICE_QO>(L_smem[tic], 0));
-      asm volatile("s_waitcnt lgkmcnt(0)");
+      load(delta_i, subvec_inplace<DOT_SLICE_QO>(delta_smem[tic], 0));
+      // Load K_j from shared memory to registers
+      // load(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}));
+      uint32_t K_j_addr = get_address(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}));
+      load<0, 0>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
+      load<0, 1>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
+      load<0, 2>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
+      load<0, 3>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
+      load<1, 0>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
+      load<1, 1>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
+      load<1, 2>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
+      load<1, 3>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
+      asm volatile("s_waitcnt vmcnt(0) lgkmcnt(0)");
       __builtin_amdgcn_s_barrier();
 
       // 10. S_ij = Q_i K_j^T * scale
       // 11. P_ij = exp(S_ij - L_i)
       // 13. dP_ij = dO_i @ V_j^T
       // 14. dS_ij = P_ij o (dP_ij - delta_i)
-      load(delta_i, subvec_inplace<DOT_SLICE_QO>(delta_smem[tic], 0));
-      load(dO_i, subtile_inplace<DOT_SLICE_QO, D>(dO_i_smem[tic][0], {0, 0}));
-      mma_ABt(P_ij, Q_i, K_j);
-      mul(P_ij, P_ij, scale_factor);
-      sub_row(P_ij, P_ij, L_i);
+      // mma_ABt(P_ij, Q_i, K_j);
+      mma_ABt<0, 0, 0>(P_ij, Q_i, K_j);
+      load<2, 0>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
+      load<2, 1>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
+      mma_ABt<0, 0, 1>(P_ij, Q_i, K_j, P_ij);
+      mma_ABt<0, 0, 2>(P_ij, Q_i, K_j, P_ij);
+      load<2, 2>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
+      load<2, 3>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
+      mma_ABt<0, 0, 3>(P_ij, Q_i, K_j, P_ij);
+      mma_ABt<0, 1, 0>(P_ij, Q_i, K_j);
+      load<3, 0>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
+      load<3, 1>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
+      mma_ABt<0, 1, 1>(P_ij, Q_i, K_j, P_ij);
+      mma_ABt<0, 1, 2>(P_ij, Q_i, K_j, P_ij);
+      load<3, 2>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
+      load<3, 3>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
+      mma_ABt<0, 1, 3>(P_ij, Q_i, K_j, P_ij);
+      asm volatile("s_waitcnt lgkmcnt(6)");
+      mma_ABt<0, 2, 0>(P_ij, Q_i, K_j);
+      uint32_t dO_i_addr = get_address(dO_i, subtile_inplace<DOT_SLICE_QO, D>(dO_i_smem[tic][0], {0, 0}));
+      load<0, 0>(dO_i, subtile_inplace<DOT_SLICE_QO, D>(dO_i_smem[tic][0], {0, 0}), dO_i_addr);
+      load<0, 1>(dO_i, subtile_inplace<DOT_SLICE_QO, D>(dO_i_smem[tic][0], {0, 0}), dO_i_addr);
+      mma_ABt<0, 2, 1>(P_ij, Q_i, K_j, P_ij);
+      asm volatile("s_waitcnt lgkmcnt(6)");
+      mma_ABt<0, 2, 2>(P_ij, Q_i, K_j, P_ij);
+      // Load dO_i from shared memory to registers
+      // load(dO_i, subtile_inplace<DOT_SLICE_QO, D>(dO_i_smem[tic][0], {0, 0}));
+      load<0, 2>(dO_i, subtile_inplace<DOT_SLICE_QO, D>(dO_i_smem[tic][0], {0, 0}), dO_i_addr);
+      load<0, 3>(dO_i, subtile_inplace<DOT_SLICE_QO, D>(dO_i_smem[tic][0], {0, 0}), dO_i_addr);
+      mma_ABt<0, 2, 3>(P_ij, Q_i, K_j, P_ij);
+      asm volatile("s_waitcnt lgkmcnt(6)");
+      mma_ABt<0, 3, 0>(P_ij, Q_i, K_j, P_ij);
+
+
+      mma_ABt<0, 3, 1>(P_ij, Q_i, K_j, P_ij);
+      mma_ABt<0, 3, 2>(P_ij, Q_i, K_j, P_ij);
+      mma_ABt<0, 3, 3>(P_ij, Q_i, K_j, P_ij);
+
+      mul<0, 0>(P_ij, P_ij, scale_factor);
+      mul<0, 1>(P_ij, P_ij, scale_factor);
+      mul<0, 2>(P_ij, P_ij, scale_factor);
+      mul<0, 3>(P_ij, P_ij, scale_factor);
+      
+      sub_row<0, 0>(P_ij, P_ij, L_i);
+      sub_row<0, 1>(P_ij, P_ij, L_i);
+      sub_row<0, 2>(P_ij, P_ij, L_i);
+      sub_row<0, 3>(P_ij, P_ij, L_i);
       asm volatile("s_waitcnt lgkmcnt(0)");
       __builtin_amdgcn_s_barrier();
 
-      load(Q_i_col, subtile_inplace<DOT_SLICE_QO, D>(Q_i_smem[tic][0], {0, 0}));
-      mma_ABt(dP_ij, dO_i, V_j);
-      load(dO_i_col, subtile_inplace<DOT_SLICE_QO, D>(dO_i_smem[tic][0], {0, 0}));
-      exp(P_ij, P_ij);
-      copy(P_ij_bf16, P_ij);
-      sub_row(dP_ij, dP_ij, delta_i);
-      mul(dP_ij, dP_ij, scale_factor);
-      mul(dP_ij, dP_ij, P_ij);
-      copy(dP_ij_bf16, dP_ij);
+      // Load Q_i_col from shared memory to registers
+      // load(Q_i_col, subtile_inplace<DOT_SLICE_QO, D>(Q_i_smem[tic][0], {0, 0}));
+      // Compute Q_i_col_addr
+      // uint32_t Q_i_col_addr = get_address(Q_i_col, subtile_inplace<DOT_SLICE_QO, D>(Q_i_smem[tic][0], {0, 0}));
+      const uint32_t Q_i_col_addr = [&] {
+        const int laneid = kittens::laneid();  
+        const uint32_t src_ptr = reinterpret_cast<uintptr_t>(&subtile_inplace<DOT_SLICE_QO, D>(Q_i_smem[tic][0], {0, 0}).data[0]);
+        const int row_offset = (laneid % 16) / 4 + (laneid / 32) * 8;
+        const int col_offset = ((laneid % 4) * 4) + 16*((laneid % 32)/16);
+        const int lane_byte_offset = (row_offset * 32 + col_offset) * sizeof(bf16);
+        const int swizzled_lane_byte_offset = lane_byte_offset ^ ((lane_byte_offset >> 9) << 5);
+        const int addr = src_ptr + swizzled_lane_byte_offset;
+        return addr;
+      }();
+      load<0, 0>(Q_i_col, subtile_inplace<DOT_SLICE_QO, D>(Q_i_smem[tic][0], {0, 0}), Q_i_col_addr);
+      load<0, 1>(Q_i_col, subtile_inplace<DOT_SLICE_QO, D>(Q_i_smem[tic][0], {0, 0}), Q_i_col_addr);
+      load<0, 2>(Q_i_col, subtile_inplace<DOT_SLICE_QO, D>(Q_i_smem[tic][0], {0, 0}), Q_i_col_addr);
+      load<0, 3>(Q_i_col, subtile_inplace<DOT_SLICE_QO, D>(Q_i_smem[tic][0], {0, 0}), Q_i_col_addr);
+
+      // mma_ABt(dP_ij, dO_i, V_j);
+      mma_ABt<0, 0, 0>(dP_ij, dO_i, V_j);
+      mma_ABt<0, 0, 1>(dP_ij, dO_i, V_j, dP_ij);
+      mma_ABt<0, 0, 2>(dP_ij, dO_i, V_j, dP_ij);
+      mma_ABt<0, 0, 3>(dP_ij, dO_i, V_j, dP_ij);
+      mma_ABt<0, 1, 0>(dP_ij, dO_i, V_j);
+      mma_ABt<0, 1, 1>(dP_ij, dO_i, V_j, dP_ij);
+      mma_ABt<0, 1, 2>(dP_ij, dO_i, V_j, dP_ij);
+      mma_ABt<0, 1, 3>(dP_ij, dO_i, V_j, dP_ij);
+      mma_ABt<0, 2, 0>(dP_ij, dO_i, V_j);
+      mma_ABt<0, 2, 1>(dP_ij, dO_i, V_j, dP_ij);
+      mma_ABt<0, 2, 2>(dP_ij, dO_i, V_j, dP_ij);
+      mma_ABt<0, 2, 3>(dP_ij, dO_i, V_j, dP_ij);
+      mma_ABt<0, 3, 0>(dP_ij, dO_i, V_j);
+      mma_ABt<0, 3, 1>(dP_ij, dO_i, V_j, dP_ij);
+      mma_ABt<0, 3, 2>(dP_ij, dO_i, V_j, dP_ij);
+      mma_ABt<0, 3, 3>(dP_ij, dO_i, V_j, dP_ij);
+      
+      // Load dO_i_col from shared memory to registers
+      // load(dO_i_col, subtile_inplace<DOT_SLICE_QO, D>(dO_i_smem[tic][0], {0, 0}));
+      // Compute dO_i_col_addr
+      // uint32_t dO_i_col_addr = get_address(dO_i_col, subtile_inplace<DOT_SLICE_QO, D>(dO_i_smem[tic][0], {0, 0}));
+      const uint32_t dO_i_col_addr = [&] {
+        const int laneid = kittens::laneid();
+        const uint32_t src_ptr = reinterpret_cast<uintptr_t>(&subtile_inplace<DOT_SLICE_QO, D>(dO_i_smem[tic][0], {0, 0}).data[0]);
+        const int row_offset = (laneid % 16) / 4 + (laneid / 32) * 8;
+        const int col_offset = ((laneid % 4) * 4) + 16*((laneid % 32)/16);
+        const int lane_byte_offset = (row_offset * 32 + col_offset) * sizeof(bf16);
+        const int swizzled_lane_byte_offset = lane_byte_offset ^ ((lane_byte_offset >> 9) << 5);
+        const uint32_t addr = src_ptr + swizzled_lane_byte_offset;
+        return addr;
+      }();
+      load<0, 0>(dO_i_col, subtile_inplace<DOT_SLICE_QO, D>(dO_i_smem[tic][0], {0, 0}), dO_i_col_addr);
+      load<0, 1>(dO_i_col, subtile_inplace<DOT_SLICE_QO, D>(dO_i_smem[tic][0], {0, 0}), dO_i_col_addr);
+      load<0, 2>(dO_i_col, subtile_inplace<DOT_SLICE_QO, D>(dO_i_smem[tic][0], {0, 0}), dO_i_col_addr);
+      load<0, 3>(dO_i_col, subtile_inplace<DOT_SLICE_QO, D>(dO_i_smem[tic][0], {0, 0}), dO_i_col_addr);
+
+      exp<0, 0>(P_ij, P_ij);
+      exp<0, 1>(P_ij, P_ij);
+      exp<0, 2>(P_ij, P_ij);
+      exp<0, 3>(P_ij, P_ij);
+      copy<0, 0>(P_ij_bf16, P_ij);
+      copy<0, 1>(P_ij_bf16, P_ij);
+      copy<0, 2>(P_ij_bf16, P_ij);
+      copy<0, 3>(P_ij_bf16, P_ij);
+      sub_row<0, 0>(dP_ij, dP_ij, delta_i);
+      sub_row<0, 1>(dP_ij, dP_ij, delta_i);
+      sub_row<0, 2>(dP_ij, dP_ij, delta_i);
+      sub_row<0, 3>(dP_ij, dP_ij, delta_i);
+      mul<0, 0>(dP_ij, dP_ij, scale_factor);
+      mul<0, 1>(dP_ij, dP_ij, scale_factor);
+      mul<0, 2>(dP_ij, dP_ij, scale_factor);
+      mul<0, 3>(dP_ij, dP_ij, scale_factor);
+      mul<0, 0>(dP_ij, dP_ij, P_ij);
+      mul<0, 1>(dP_ij, dP_ij, P_ij);
+      mul<0, 2>(dP_ij, dP_ij, P_ij);
+      mul<0, 3>(dP_ij, dP_ij, P_ij);
+      copy<0, 0>(dP_ij_bf16, dP_ij);
+      copy<0, 1>(dP_ij_bf16, dP_ij);
+      copy<0, 2>(dP_ij_bf16, dP_ij);
+      copy<0, 3>(dP_ij_bf16, dP_ij);
       asm volatile("s_waitcnt lgkmcnt(0)");
       __builtin_amdgcn_s_barrier();
 
       // 12. dV_j += P_ij^T @ dO_i
       // 16. dK_j += dS_ij^T @ Q_i   (128x64)=(128x16)x(16x64)
       auto attn_i_smem_subtile = subtile_inplace<WARP_SIZE_KV, DOT_SLICE_QO>(attn_i_smem, {warpid, 0});
-      store(attn_i_smem_subtile, dP_ij_bf16_accum_row);
-      load(K_j_col, subtile_inplace<256, 32>(K_j_smem, {0, warpid}));
+
+      // Store dP_ij_bf16_accum_row to shared memory
+      // store(attn_i_smem_subtile, dP_ij_bf16_accum_row);
+      uint32_t dP_ij_bf16_accum_row_addr = get_address(attn_i_smem_subtile, dP_ij_bf16_accum_row);
+      store<0, 0>(attn_i_smem_subtile, dP_ij_bf16_accum_row, dP_ij_bf16_accum_row_addr);
+      store<1, 0>(attn_i_smem_subtile, dP_ij_bf16_accum_row, dP_ij_bf16_accum_row_addr);
+      store<2, 0>(attn_i_smem_subtile, dP_ij_bf16_accum_row, dP_ij_bf16_accum_row_addr);
+      store<3, 0>(attn_i_smem_subtile, dP_ij_bf16_accum_row, dP_ij_bf16_accum_row_addr);
+
+      // Load K_j_col from shared memory to registers
+      // load(K_j_col, subtile_inplace<256, 32>(K_j_smem, {0, warpid}));
+      // Compute K_j_col_addr
+      const uint32_t K_j_col_addr = [&] {
+        const int laneid = kittens::laneid();
+        const uint32_t src_ptr = reinterpret_cast<uintptr_t>(&subtile_inplace<256, 32>(K_j_smem, {0, warpid}).data[0]);
+        const int row_offset = (laneid % 16) / 4 + (laneid / 16) * 4;
+        const int col_offset = ((laneid % 4) * 4);
+        const int lane_byte_offset = (row_offset * 16 + col_offset) * sizeof(bf16);
+        const uint32_t addr = src_ptr + lane_byte_offset;
+        return addr;
+      }();
+      // uint32_t K_j_col_addr = get_address(K_j_col, subtile_inplace<256, 32>(K_j_smem, {0, warpid}));
+      load<0, 0>(K_j_col, subtile_inplace<256, 32>(K_j_smem, {0, warpid}), K_j_col_addr);
+      load<0, 1>(K_j_col, subtile_inplace<256, 32>(K_j_smem, {0, warpid}), K_j_col_addr);
+      load<1, 0>(K_j_col, subtile_inplace<256, 32>(K_j_smem, {0, warpid}), K_j_col_addr);
+      load<1, 1>(K_j_col, subtile_inplace<256, 32>(K_j_smem, {0, warpid}), K_j_col_addr);
+      load<2, 0>(K_j_col, subtile_inplace<256, 32>(K_j_smem, {0, warpid}), K_j_col_addr);
+      load<2, 1>(K_j_col, subtile_inplace<256, 32>(K_j_smem, {0, warpid}), K_j_col_addr);
+      load<3, 0>(K_j_col, subtile_inplace<256, 32>(K_j_smem, {0, warpid}), K_j_col_addr);
+      load<3, 1>(K_j_col, subtile_inplace<256, 32>(K_j_smem, {0, warpid}), K_j_col_addr);
+      load<4, 0>(K_j_col, subtile_inplace<256, 32>(K_j_smem, {0, warpid}), K_j_col_addr);
+      load<4, 1>(K_j_col, subtile_inplace<256, 32>(K_j_smem, {0, warpid}), K_j_col_addr);
+      load<5, 0>(K_j_col, subtile_inplace<256, 32>(K_j_smem, {0, warpid}), K_j_col_addr);
+      load<5, 1>(K_j_col, subtile_inplace<256, 32>(K_j_smem, {0, warpid}), K_j_col_addr);
+      load<6, 0>(K_j_col, subtile_inplace<256, 32>(K_j_smem, {0, warpid}), K_j_col_addr);
+      load<6, 1>(K_j_col, subtile_inplace<256, 32>(K_j_smem, {0, warpid}), K_j_col_addr);
+      load<7, 0>(K_j_col, subtile_inplace<256, 32>(K_j_smem, {0, warpid}), K_j_col_addr);
+      load<7, 1>(K_j_col, subtile_inplace<256, 32>(K_j_smem, {0, warpid}), K_j_col_addr);
+
       swap_layout_inplace(P_ij_bf16_col, P_ij_bf16);
-      mma_AtB(dV_j_T, dO_i_col, P_ij_bf16_col); 
+
+      // mma_AtB(dV_j_T, dO_i_col, P_ij_bf16_col);
+      mma_AtB<0, 0, 0>(dV_j_T, dO_i_col, P_ij_bf16_col);
+      mma_AtB<0, 1, 0>(dV_j_T, dO_i_col, P_ij_bf16_col);
+      mma_AtB<1, 0, 0>(dV_j_T, dO_i_col, P_ij_bf16_col);
+      mma_AtB<1, 1, 0>(dV_j_T, dO_i_col, P_ij_bf16_col);
+      mma_AtB<2, 0, 0>(dV_j_T, dO_i_col, P_ij_bf16_col);
+      mma_AtB<2, 1, 0>(dV_j_T, dO_i_col, P_ij_bf16_col);
+      mma_AtB<3, 0, 0>(dV_j_T, dO_i_col, P_ij_bf16_col);
+      mma_AtB<3, 1, 0>(dV_j_T, dO_i_col, P_ij_bf16_col);
+
       swap_layout_inplace(dP_ij_bf16_col, dP_ij_bf16);
-      mma_AtB(dK_j_T, Q_i_col, dP_ij_bf16_col);
+
+      // mma_AtB(dK_j_T, Q_i_col, dP_ij_bf16_col);
+      mma_AtB<0, 0, 0>(dK_j_T, Q_i_col, dP_ij_bf16_col);
+      mma_AtB<0, 1, 0>(dK_j_T, Q_i_col, dP_ij_bf16_col);
+      mma_AtB<1, 0, 0>(dK_j_T, Q_i_col, dP_ij_bf16_col);
+      mma_AtB<1, 1, 0>(dK_j_T, Q_i_col, dP_ij_bf16_col);
+      mma_AtB<2, 0, 0>(dK_j_T, Q_i_col, dP_ij_bf16_col);
+      mma_AtB<2, 1, 0>(dK_j_T, Q_i_col, dP_ij_bf16_col);
+      mma_AtB<3, 0, 0>(dK_j_T, Q_i_col, dP_ij_bf16_col);
+      mma_AtB<3, 1, 0>(dK_j_T, Q_i_col, dP_ij_bf16_col);
       asm volatile("s_waitcnt lgkmcnt(0)");
       __builtin_amdgcn_s_barrier();
     
-      load(dP_ij_bf16_col_T, attn_i_smem);
+      // Load dP_ij_bf16_col_T from shared memory to registers
+      // load(dP_ij_bf16_col_T, attn_i_smem);
+      // Compute dP_ij_bf16_col_T_addr
+      const uint32_t dP_ij_bf16_col_T_addr = [&] {
+        const int laneid = kittens::laneid();
+        const uint32_t src_ptr = reinterpret_cast<uintptr_t>(&attn_i_smem.data[0]);
+        const int row_offset = (laneid % 16) / 4 + (laneid / 16) * 4;
+        const int col_offset = ((laneid % 4) * 4);
+        const int lane_byte_offset = (row_offset * 16 + col_offset) * sizeof(bf16);
+        const int swizzled_lane_byte_offset = lane_byte_offset ^ ((lane_byte_offset >> 7) << 3);
+        const uint32_t addr = src_ptr + swizzled_lane_byte_offset;
+        return addr;
+      }();
+      // uint32_t dP_ij_bf16_col_T_addr = get_address(dP_ij_bf16_col_T, attn_i_smem);
+      load<0, 0>(dP_ij_bf16_col_T, attn_i_smem, dP_ij_bf16_col_T_addr);
+      load<1, 0>(dP_ij_bf16_col_T, attn_i_smem, dP_ij_bf16_col_T_addr);
+      load<2, 0>(dP_ij_bf16_col_T, attn_i_smem, dP_ij_bf16_col_T_addr);
+      load<3, 0>(dP_ij_bf16_col_T, attn_i_smem, dP_ij_bf16_col_T_addr);
+      load<4, 0>(dP_ij_bf16_col_T, attn_i_smem, dP_ij_bf16_col_T_addr);
+      load<5, 0>(dP_ij_bf16_col_T, attn_i_smem, dP_ij_bf16_col_T_addr);
+      load<6, 0>(dP_ij_bf16_col_T, attn_i_smem, dP_ij_bf16_col_T_addr);
+      load<7, 0>(dP_ij_bf16_col_T, attn_i_smem, dP_ij_bf16_col_T_addr);
+
       asm volatile("s_waitcnt lgkmcnt(0)");
       __builtin_amdgcn_s_barrier();
+
+      // 15. dQ_i += dS_ij @ K_j (32x16)=(32x256)x(256x16)
+      // mma_AtB(dQ_i_T, K_j_col, dP_ij_bf16_col_T);
+      mma_AtB<0, 0, 0>(dQ_i_T, K_j_col, dP_ij_bf16_col_T);
+      mma_AtB<0, 0, 1>(dQ_i_T, K_j_col, dP_ij_bf16_col_T, dQ_i_T);
+      mma_AtB<0, 0, 2>(dQ_i_T, K_j_col, dP_ij_bf16_col_T, dQ_i_T);
+      mma_AtB<0, 0, 3>(dQ_i_T, K_j_col, dP_ij_bf16_col_T, dQ_i_T);
+      mma_AtB<0, 0, 4>(dQ_i_T, K_j_col, dP_ij_bf16_col_T, dQ_i_T);
+      mma_AtB<0, 0, 5>(dQ_i_T, K_j_col, dP_ij_bf16_col_T, dQ_i_T);
+      mma_AtB<0, 0, 6>(dQ_i_T, K_j_col, dP_ij_bf16_col_T, dQ_i_T);
+      mma_AtB<0, 0, 7>(dQ_i_T, K_j_col, dP_ij_bf16_col_T, dQ_i_T);
+      mma_AtB<1, 0, 0>(dQ_i_T, K_j_col, dP_ij_bf16_col_T);
+      mma_AtB<1, 0, 1>(dQ_i_T, K_j_col, dP_ij_bf16_col_T, dQ_i_T);
+      mma_AtB<1, 0, 2>(dQ_i_T, K_j_col, dP_ij_bf16_col_T, dQ_i_T);
+      mma_AtB<1, 0, 3>(dQ_i_T, K_j_col, dP_ij_bf16_col_T, dQ_i_T);
+      mma_AtB<1, 0, 4>(dQ_i_T, K_j_col, dP_ij_bf16_col_T, dQ_i_T);
+      mma_AtB<1, 0, 5>(dQ_i_T, K_j_col, dP_ij_bf16_col_T, dQ_i_T);
+      mma_AtB<1, 0, 6>(dQ_i_T, K_j_col, dP_ij_bf16_col_T, dQ_i_T);
+      mma_AtB<1, 0, 7>(dQ_i_T, K_j_col, dP_ij_bf16_col_T, dQ_i_T);
+      atomic_pk_add_bf16_with_warpid<2>(g.dQg, dQ_i, {batch_idx, q_head_idx, q_seq_idx * 4, 0}, warpid);
     }
 
     // dot slice 1
     {
-      // 15. dQ_i += dS_ij @ K_j (32x16)=(32x256)x(256x16)
-      mma_AtB(dQ_i_T, K_j_col, dP_ij_bf16_col_T);
-      atomic_pk_add_bf16_with_warpid<2>(g.dQg, dQ_i, {batch_idx, q_head_idx, q_seq_idx * 4, 0}, warpid);
 
       load(delta_smem[toc], g.delta_vec, {batch_idx, next_q_head_idx, 0, next_q_seq_idx});
       G::load<1, false>(dO_i_smem[toc][0], g.dOg, {batch_idx, next_q_seq_idx * 2, next_q_head_idx, 0});
