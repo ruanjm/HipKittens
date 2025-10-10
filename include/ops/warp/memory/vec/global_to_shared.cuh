@@ -62,7 +62,7 @@ __device__ static inline void load(SV &dst, const GL &src, const COORD &idx) {
             lane_byte_offset,
             0,
             0,
-            static_cast<index_t>(coherency::cache_all));
+            static_cast<int>(coherency::cache_all));
     }
 }
 

@@ -35,21 +35,18 @@ __device__ inline static void load(RV &dst, const SV &src) {
     
     // TODO: this uses no inter-thread communication and is therefore not optimal.
     if constexpr (std::is_same_v<typename RV::layout, align_l>) {
-        #pragma unroll
-        for(auto w = 0; w < dst.outer_dim; w++) {
-            int idx = w*32 + 8*(laneid/32);
-            // this should be a maximally coalesced load.
-            #pragma unroll
-            for(int i = 0; i < 2; i++) {
-                #pragma unroll
-                for(int j = 0; j < 4; j++) {
-                    dst[w][i * 4 + j] = base_types::convertor<T2, U2>::convert(*(U2*)&src.data[idx + i * 16 + j * 2]);
-                }
-            }
-        }
-    }
-    else if constexpr (std::is_same_v<typename RV::layout, accum_align_l>) {
-
+        // #pragma unroll
+        // for(auto w = 0; w < dst.outer_dim; w++) {
+        //     int idx = w*32 + 8*(laneid/32);
+        //     // this should be a maximally coalesced load.
+        //     #pragma unroll
+        //     for(int i = 0; i < 2; i++) {
+        //         #pragma unroll
+        //         for(int j = 0; j < 4; j++) {
+        //             dst[w][i * 4 + j] = base_types::convertor<T2, U2>::convert(*(U2*)&src.data[idx + i * 16 + j * 2]);
+        //         }
+        //     }
+        // }
         const int lane_offset = 4*(laneid/16) + laneid%4;
         const uint32_t addr = reinterpret_cast<uintptr_t>(&src.data[0]) + lane_offset * sizeof(U);
         #pragma unroll
@@ -221,17 +218,17 @@ __device__ inline static void store(SV &dst, const RV &src) {
                 *(U2*)&dst.data[idx] = base_types::convertor<U2, T2>::convert(src[o_dim][i_dim]);
         }
     }
-    else if constexpr (std::is_same_v<typename RV::layout, accum_align_l>) {
-        #pragma unroll
-        for(auto w = 0; w < (src.outer_dim+3)/4; w++) {
-            int idx = w*2*kittens::WARP_THREADS + 8*((laneid%32)/2) + 4*(laneid/32) + 2*(laneid%2);
-            int o_dim = w*4 + ((laneid%32)/8);
-            int i_dim = (laneid%8);
-            // this should be a maximally coalesced store. I hope!
-            if(idx < src.length)
-                *(U2*)&dst.data[idx] = base_types::convertor<U2, T2>::convert(src[o_dim][i_dim]);
-        }
-    }
+    // else if constexpr (std::is_same_v<typename RV::layout, accum_align_l>) {
+    //     #pragma unroll
+    //     for(auto w = 0; w < (src.outer_dim+3)/4; w++) {
+    //         int idx = w*2*kittens::WARP_THREADS + 8*((laneid%32)/2) + 4*(laneid/32) + 2*(laneid%2);
+    //         int o_dim = w*4 + ((laneid%32)/8);
+    //         int i_dim = (laneid%8);
+    //         // this should be a maximally coalesced store. I hope!
+    //         if(idx < src.length)
+    //             *(U2*)&dst.data[idx] = base_types::convertor<U2, T2>::convert(src[o_dim][i_dim]);
+    //     }
+    // }
     else if constexpr (std::is_same_v<typename RV::layout, ortho_l>) {
         #pragma unroll
         for(auto w = 0; w < (src.outer_dim+1)/2; w++) {

@@ -68,6 +68,7 @@ using rt_16x32_4_s = ducks::rt_shape::rt_16x32_4;
 
 // shared tile shapes
 using st_16x16_s = ducks::st_shape::st_16x16;
+using st_16x16_swizzled_s = ducks::st_shape::st_16x16_swizzled;
 using st_32x32_s = ducks::st_shape::st_32x32;
 using st_16x32_s = ducks::st_shape::st_16x32;
 using st_32x16_s = ducks::st_shape::st_32x16;
