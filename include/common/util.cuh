@@ -57,7 +57,44 @@ __device__ __forceinline__ int warpgroupid() { return threadIdx.x >> 8; }
  */
 __device__ __forceinline__ int laneid() { return threadIdx.x & 0x3f; }
 
+/**
+   * @brief Transform a workgroup ID to a new workgroup ID based on the chunk size and number of XCDs.
+   * @param workgroup_id The original workgroup ID.
+   * @param num_workgroups The total number of workgroups.
+   * @param num_xcds The number of XCDs.
+   * @param chunk_size The chunk size.
+   * @return The new workgroup ID.
+   */
+   __host__ __device__ inline int chiplet_transform_chunked(
+    int workgroup_id, 
+    int num_workgroups,
+    int num_xcds,
+    int chunk_size 
+) {
+    // Current XCD
+    int xcd = workgroup_id % num_xcds;
+
+    // Largest full (NUM_XCDS*CHUNK_SIZE)-aligned block
+    int block = num_xcds * chunk_size;
+    int limit = (num_workgroups / block) * block;
+
+    // If pid beyond the last full block, leave unchanged
+    if (workgroup_id > limit) return workgroup_id;
+
+    // Local PID (within round-robin assignment)
+    int local_pid    = workgroup_id / num_xcds;
+    int chunk_idx    = local_pid / chunk_size;
+    int pos_in_chunk = local_pid % chunk_size;
+
+    // New PID
+    return chunk_idx * block + xcd * chunk_size + pos_in_chunk;
+}
+
+
 constexpr int MAX_SHARED_MEMORY = 160000;
+constexpr int NUM_XCDS = 8;
+constexpr int CUS_PER_XCD = 32;
+constexpr int NUM_CUS = CUS_PER_XCD * NUM_XCDS;
 
 /* ----------  CUSTOM TYPES  ---------- */
 typedef uint32_t      uint2_t __attribute__((ext_vector_type(2)));
