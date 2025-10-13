@@ -2,7 +2,7 @@
 GPU_TARGET=CDNA4
 
 TARGET=tk_kernel
-SRC=256_256_64_32_with16x32.cpp
+SRC=micro_04_2stage_12c4p.cpp
 
 # HIP variables
 ROCM_INSTALL_DIR := $(ROCM_PATH)
@@ -16,7 +16,7 @@ HIPFLAGS+= -DKITTENS_CDNA2 --offload-arch=gfx90a
 else ifeq ($(GPU_TARGET),CDNA3)
 HIPFLAGS+= -DKITTENS_CDNA3 --offload-arch=gfx942
 else ifeq ($(GPU_TARGET),CDNA4)
-HIPFLAGS+= -DKITTENS_CDNA4 --offload-arch=gfx950
+HIPFLAGS+= -DKITTENS_CDNA4 --offload-arch=gfx950 -DHIP_ENABLE_WARP_SYNC_BUILTINS -ffast-math 
 endif
 
 # Common variables and flags
@@ -29,7 +29,7 @@ ILDLIBS   :=
 CXXFLAGS ?= -Wall -Wextra
 CXXFLAGS := -w
 
-ICXXFLAGS += $(CXXFLAGS) 
+ICXXFLAGS += $(CXXFLAGS)
 ICPPFLAGS += $(CPPFLAGS)
 ILDFLAGS  += $(LDFLAGS)
 ILDLIBS   += $(LDLIBS)
@@ -42,12 +42,13 @@ ICXXFLAGS+= -I${THUNDERKITTENS_ROOT}/include -I${THUNDERKITTENS_ROOT}/prototype 
 # Default target
 all: $(TARGET)
 
-# LOGDIR := data_logs/$(shell date +%m%d_%H%M%S)_outputs
-# LOGFILE := $(LOGDIR)/make_build.log
-# 
+LOGDIR := /workdir/data_logs/$(shell date +%m%d_%H%M%S)_outputs
+LOGFILE := $(LOGDIR)/make_build.log
+
 $(TARGET): $(SRC)
+	@mkdir -p $(LOGDIR)
 	$(HIPCXX) $(SRC) $(HIPFLAGS) $(ICXXFLAGS) $(ICPPFLAGS) $(ILDFLAGS) \
-	    -o $(TARGET)$(shell python3-config --extension-suffix) 
+	    -o $(TARGET)$(shell python3-config --extension-suffix) 2>&1 | tee $(LOGFILE)
 
 # Clean target
 clean:

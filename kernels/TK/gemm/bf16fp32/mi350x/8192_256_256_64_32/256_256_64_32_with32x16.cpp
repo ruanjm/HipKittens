@@ -38,12 +38,12 @@ __global__ __launch_bounds__(NUM_THREADS, 2)
 void micro_tk(const micro_globals g) {
     extern __shared__ alignment_dummy __shm[];
     shared_allocator al((int*)&__shm[0]);
-    st_bf<BLOCK_SIZE, K_STEP> (&As)[2] = al.allocate<st_bf<BLOCK_SIZE, K_STEP>, 2>();
-    st_bf<BLOCK_SIZE, K_STEP> (&Bs)[2] = al.allocate<st_bf<BLOCK_SIZE, K_STEP>, 2>();
+    st_bf<BLOCK_SIZE, K_STEP, st_32x32_s> (&As)[2] = al.allocate<st_bf<BLOCK_SIZE, K_STEP, st_32x32_s>, 2>();
+    st_bf<BLOCK_SIZE, K_STEP, st_32x32_s> (&Bs)[2] = al.allocate<st_bf<BLOCK_SIZE, K_STEP, st_32x32_s>, 2>();
 
-    rt_bf<REG_BLOCK_M, DOT_SLICE> A_tile;
-    rt_bf<REG_BLOCK_N, DOT_SLICE> B_tile;
-    rt_fl<REG_BLOCK_M, REG_BLOCK_N, ducks::rt_layout::accumulator_col> C_accum;
+    rt_bf<REG_BLOCK_M, DOT_SLICE, row_l, rt_32x16_s> A_tile;
+    rt_bf<REG_BLOCK_N, DOT_SLICE, row_l, rt_32x16_s> B_tile;
+    rt_fl<REG_BLOCK_M, REG_BLOCK_N, col_l, rt_32x32_s> C_accum;
     zero(C_accum);
 
     // Original WGID.
@@ -75,15 +75,14 @@ void micro_tk(const micro_globals g) {
 
     int tic = 0;
     int toc = 1;
-    using T = typename st_bf<BLOCK_SIZE, K_STEP>::dtype;
-    constexpr int bytes_per_thread = 16;
+    using T = typename st_bf<BLOCK_SIZE, K_STEP, st_32x32_s>::dtype;
+    constexpr int bytes_per_thread = st_32x32_s::template bytes_per_thread<T>();
     constexpr int bytes_per_memcpy = bytes_per_thread * NUM_THREADS;
     constexpr int memcpy_per_tile = BLOCK_SIZE * K_STEP * sizeof(T) / bytes_per_memcpy;
     uint32_t swizzled_offsets_A[memcpy_per_tile];
     uint32_t swizzled_offsets_B[memcpy_per_tile];
     G::prefill_swizzled_offsets(As[tic], g.a, swizzled_offsets_A);
     G::prefill_swizzled_offsets(Bs[tic], g.b, swizzled_offsets_B);
-    const lds_lane_ofs lane_ofs = prefill_swizzled_offsets(A_tile, As[tic]);
 
     // Load first tile into shared memory
     G::load(As[tic], g.a, {0, 0, row, 0}, swizzled_offsets_A);  
@@ -99,9 +98,9 @@ void micro_tk(const micro_globals g) {
     for (int tile = 0; tile < num_tiles - 1; ++tile, tic^=1, toc^=1) {
 
         // Cluster 0
-        load(A_tile, subtile_inplace<REG_BLOCK_M, DOT_SLICE>(As[tic], {warp_row, 0}), lane_ofs);
+        load(A_tile, subtile_inplace<REG_BLOCK_M, DOT_SLICE>(As[tic], {warp_row, 0}));
         G::load(As[toc], g.a, {0, 0, row, tile+1}, swizzled_offsets_A);
-        load(B_tile, subtile_inplace<REG_BLOCK_N, DOT_SLICE>(Bs[tic], {warp_col, 0}), lane_ofs);
+        load(B_tile, subtile_inplace<REG_BLOCK_N, DOT_SLICE>(Bs[tic], {warp_col, 0}));
         G::load(Bs[toc], g.b, {0, 0, col, tile+1}, swizzled_offsets_B);
         __builtin_amdgcn_s_barrier();
 
@@ -113,8 +112,8 @@ void micro_tk(const micro_globals g) {
         __builtin_amdgcn_s_barrier();
 
         // Cluster 2
-        load(A_tile, subtile_inplace<REG_BLOCK_M, DOT_SLICE>(As[tic], {warp_row, 1}), lane_ofs);
-        load(B_tile, subtile_inplace<REG_BLOCK_N, DOT_SLICE>(Bs[tic], {warp_col, 1}), lane_ofs);
+        load(A_tile, subtile_inplace<REG_BLOCK_M, DOT_SLICE>(As[tic], {warp_row, 1}));
+        load(B_tile, subtile_inplace<REG_BLOCK_N, DOT_SLICE>(Bs[tic], {warp_col, 1}));
         __builtin_amdgcn_s_waitcnt(0);
         __builtin_amdgcn_s_barrier();
 
@@ -129,8 +128,8 @@ void micro_tk(const micro_globals g) {
     // Epilogue
     // Cluster 0
     __builtin_amdgcn_sched_barrier(0);
-    load(A_tile, subtile_inplace<REG_BLOCK_M, DOT_SLICE>(As[tic], {warp_row, 0}), lane_ofs);
-    load(B_tile, subtile_inplace<REG_BLOCK_N, DOT_SLICE>(Bs[tic], {warp_col, 0}), lane_ofs);
+    load(A_tile, subtile_inplace<REG_BLOCK_M, DOT_SLICE>(As[tic], {warp_row, 0}));
+    load(B_tile, subtile_inplace<REG_BLOCK_N, DOT_SLICE>(Bs[tic], {warp_col, 0}));
     __builtin_amdgcn_s_barrier();    
 
     // Cluster 1
@@ -141,8 +140,8 @@ void micro_tk(const micro_globals g) {
     __builtin_amdgcn_s_barrier();
 
     // Cluster 2
-    load(A_tile, subtile_inplace<REG_BLOCK_M, DOT_SLICE>(As[tic], {warp_row, 1}), lane_ofs);
-    load(B_tile, subtile_inplace<REG_BLOCK_N, DOT_SLICE>(Bs[tic], {warp_col, 1}), lane_ofs);
+    load(A_tile, subtile_inplace<REG_BLOCK_M, DOT_SLICE>(As[tic], {warp_row, 1}));
+    load(B_tile, subtile_inplace<REG_BLOCK_N, DOT_SLICE>(Bs[tic], {warp_col, 1}));
     __builtin_amdgcn_s_barrier();
 
     // Cluster 3

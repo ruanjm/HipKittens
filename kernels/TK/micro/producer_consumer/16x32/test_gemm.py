@@ -14,8 +14,8 @@ args = parser.parse_args()
 
 # Inputs
 M = 192*40    
-N = 192*40    
-K = 192*40    
+K = 8192
+N = 8192  
 # A = torch.randn(N, N, dtype=torch.bfloat16, device='cuda') / 10.0  
 # B = torch.randn(N, N, dtype=torch.bfloat16, device='cuda') / 10.0  
 # Bt = B.t().contiguous()  # Transpose B for the kernel
@@ -25,7 +25,7 @@ num_blocks_y = (N / 256)
 print(f"{num_blocks_x=} mod 32 {num_blocks_x % 32}, {num_blocks_y=} mod 32 {num_blocks_y % 32}\n")
 
 if args.profile:
-    num_warmup = 100
+    num_warmup = 1000
     num_iters = 100
 else:
     num_warmup = 0
@@ -131,8 +131,6 @@ print(f"Kernel: {C_float[-3:, -8:]}")
 print(f"Max error between kernel and reference: {max_error}")
 print(f"Max error: {max_error}")
 print(f"Mean error: {mean_error}")
-print(f"Number of large errors (>0.1): {error_count} out of {M*N}\n")
+print(f"Number of large errors (>0.1): {error_count} out of {M*N} ({error_count / (M*N) * 100:.2f}%)\n")
 
 # breakpoint()
-
-
