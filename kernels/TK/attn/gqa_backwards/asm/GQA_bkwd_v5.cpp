@@ -332,8 +332,6 @@ __global__ __attribute__((amdgpu_num_vgpr(30))) void attend_bwd_combined_ker(con
       load<1, 0>(K_j_col, subtile_inplace<256, 32>(K_j_smem, {0, warpid}), K_j_col_addr);
       load<1, 1>(K_j_col, subtile_inplace<256, 32>(K_j_smem, {0, warpid}), K_j_col_addr);
       mma_AtB<1, 1, 0>(dV_j_T, dO_i_col, P_ij_bf16_col);
-      mul<0, 0>(dP_ij, dP_ij, scale_factor);
-      mul<0, 1>(dP_ij, dP_ij, scale_factor);
       mul<0, 0>(dP_ij, dP_ij, P_ij);
       mul<0, 1>(dP_ij, dP_ij, P_ij);
       copy<0, 0>(dP_ij_bf16, dP_ij);
@@ -350,8 +348,6 @@ __global__ __attribute__((amdgpu_num_vgpr(30))) void attend_bwd_combined_ker(con
       store<1, 0>(attn_i_smem_subtile, dP_ij_bf16_accum_row, dP_ij_bf16_accum_row_addr);
       mma_AtB<2, 1, 0>(dV_j_T, dO_i_col, P_ij_bf16_col);
       sub_row<0, 3, delta_i>(dP_ij, dP_ij);
-      mul<0, 2>(dP_ij, dP_ij, scale_factor);
-      mul<0, 3>(dP_ij, dP_ij, scale_factor);
       mul<0, 2>(dP_ij, dP_ij, P_ij);
       mul<0, 3>(dP_ij, dP_ij, P_ij);
       copy<0, 2>(dP_ij_bf16, dP_ij);
@@ -455,10 +451,12 @@ __global__ __attribute__((amdgpu_num_vgpr(30))) void attend_bwd_combined_ker(con
       load<2, 0>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       load<2, 1>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       mma_ABt<0, 0, 1>(P_ij, Q_i, K_j, P_ij);
+      mul<0, 0>(dQ_i_T, dQ_i_T, scale_factor);
       mma_ABt<0, 0, 2>(P_ij, Q_i, K_j, P_ij);
       load<2, 2>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       load<2, 3>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       mma_ABt<0, 0, 3>(P_ij, Q_i, K_j, P_ij);
+      mul<1, 0>(dQ_i_T, dQ_i_T, scale_factor);
       mma_ABt<0, 1, 0>(P_ij, Q_i, K_j);
       load<3, 0>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       load<3, 1>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
@@ -571,8 +569,6 @@ __global__ __attribute__((amdgpu_num_vgpr(30))) void attend_bwd_combined_ker(con
       load<1, 0>(K_j_col, subtile_inplace<256, 32>(K_j_smem, {0, warpid}), K_j_col_addr);
       load<1, 1>(K_j_col, subtile_inplace<256, 32>(K_j_smem, {0, warpid}), K_j_col_addr);
       mma_AtB<1, 1, 0>(dV_j_T, dO_i_col, P_ij_bf16_col, dV_j_T);
-      mul<0, 0>(dP_ij, dP_ij, scale_factor);
-      mul<0, 1>(dP_ij, dP_ij, scale_factor);
       mul<0, 0>(dP_ij, dP_ij, P_ij);
       mul<0, 1>(dP_ij, dP_ij, P_ij);
       copy<0, 0>(dP_ij_bf16, dP_ij);
@@ -589,8 +585,6 @@ __global__ __attribute__((amdgpu_num_vgpr(30))) void attend_bwd_combined_ker(con
       atomic_pk_add_bf16_with_warpid<2>(g.dQg, dQ_i, {batch_idx, q_head_idx, q_seq_idx * 4, 0}, warpid);
       mma_AtB<2, 1, 0>(dV_j_T, dO_i_col, P_ij_bf16_col, dV_j_T);
       sub_row<0, 3, delta_i>(dP_ij, dP_ij);
-      mul<0, 2>(dP_ij, dP_ij, scale_factor);
-      mul<0, 3>(dP_ij, dP_ij, scale_factor);
       mul<0, 2>(dP_ij, dP_ij, P_ij);
       mul<0, 3>(dP_ij, dP_ij, P_ij);
       copy<0, 2>(dP_ij_bf16, dP_ij);
@@ -693,10 +687,12 @@ __global__ __attribute__((amdgpu_num_vgpr(30))) void attend_bwd_combined_ker(con
       load<2, 0>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       load<2, 1>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       mma_ABt<0, 0, 1>(P_ij, Q_i, K_j, P_ij);
+      mul<0, 0>(dQ_i_T, dQ_i_T, scale_factor);
       mma_ABt<0, 0, 2>(P_ij, Q_i, K_j, P_ij);
       load<2, 2>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       load<2, 3>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       mma_ABt<0, 0, 3>(P_ij, Q_i, K_j, P_ij);
+      mul<1, 0>(dQ_i_T, dQ_i_T, scale_factor);
       mma_ABt<0, 1, 0>(P_ij, Q_i, K_j);
       load<3, 0>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       load<3, 1>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
@@ -809,8 +805,6 @@ __global__ __attribute__((amdgpu_num_vgpr(30))) void attend_bwd_combined_ker(con
       load<1, 0>(K_j_col, subtile_inplace<256, 32>(K_j_smem, {0, warpid}), K_j_col_addr);
       load<1, 1>(K_j_col, subtile_inplace<256, 32>(K_j_smem, {0, warpid}), K_j_col_addr);
       mma_AtB<1, 1, 0>(dV_j_T, dO_i_col, P_ij_bf16_col, dV_j_T);
-      mul<0, 0>(dP_ij, dP_ij, scale_factor);
-      mul<0, 1>(dP_ij, dP_ij, scale_factor);
       mul<0, 0>(dP_ij, dP_ij, P_ij);
       mul<0, 1>(dP_ij, dP_ij, P_ij);
       copy<0, 0>(dP_ij_bf16, dP_ij);
@@ -827,8 +821,6 @@ __global__ __attribute__((amdgpu_num_vgpr(30))) void attend_bwd_combined_ker(con
       atomic_pk_add_bf16_with_warpid<2>(g.dQg, dQ_i, {batch_idx, q_head_idx, q_seq_idx * 4 + 1, 0}, warpid);
       mma_AtB<2, 1, 0>(dV_j_T, dO_i_col, P_ij_bf16_col, dV_j_T);
       sub_row<0, 3, delta_i>(dP_ij, dP_ij);
-      mul<0, 2>(dP_ij, dP_ij, scale_factor);
-      mul<0, 3>(dP_ij, dP_ij, scale_factor);
       mul<0, 2>(dP_ij, dP_ij, P_ij);
       mul<0, 3>(dP_ij, dP_ij, P_ij);
       copy<0, 2>(dP_ij_bf16, dP_ij);
@@ -931,10 +923,12 @@ __global__ __attribute__((amdgpu_num_vgpr(30))) void attend_bwd_combined_ker(con
       load<2, 0>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       load<2, 1>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       mma_ABt<0, 0, 1>(P_ij, Q_i, K_j, P_ij);
+      mul<0, 0>(dQ_i_T, dQ_i_T, scale_factor);
       mma_ABt<0, 0, 2>(P_ij, Q_i, K_j, P_ij);
       load<2, 2>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       load<2, 3>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       mma_ABt<0, 0, 3>(P_ij, Q_i, K_j, P_ij);
+      mul<1, 0>(dQ_i_T, dQ_i_T, scale_factor);
       mma_ABt<0, 1, 0>(P_ij, Q_i, K_j);
       load<3, 0>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       load<3, 1>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
@@ -1047,8 +1041,6 @@ __global__ __attribute__((amdgpu_num_vgpr(30))) void attend_bwd_combined_ker(con
       load<1, 0>(K_j_col, subtile_inplace<256, 32>(K_j_smem, {0, warpid}), K_j_col_addr);
       load<1, 1>(K_j_col, subtile_inplace<256, 32>(K_j_smem, {0, warpid}), K_j_col_addr);
       mma_AtB<1, 1, 0>(dV_j_T, dO_i_col, P_ij_bf16_col, dV_j_T);
-      mul<0, 0>(dP_ij, dP_ij, scale_factor);
-      mul<0, 1>(dP_ij, dP_ij, scale_factor);
       mul<0, 0>(dP_ij, dP_ij, P_ij);
       mul<0, 1>(dP_ij, dP_ij, P_ij);
       copy<0, 0>(dP_ij_bf16, dP_ij);
@@ -1065,8 +1057,6 @@ __global__ __attribute__((amdgpu_num_vgpr(30))) void attend_bwd_combined_ker(con
       atomic_pk_add_bf16_with_warpid<2>(g.dQg, dQ_i, {batch_idx, q_head_idx, q_seq_idx * 4 + 2, 0}, warpid);
       mma_AtB<2, 1, 0>(dV_j_T, dO_i_col, P_ij_bf16_col, dV_j_T);
       sub_row<0, 3, delta_i>(dP_ij, dP_ij);
-      mul<0, 2>(dP_ij, dP_ij, scale_factor);
-      mul<0, 3>(dP_ij, dP_ij, scale_factor);
       mul<0, 2>(dP_ij, dP_ij, P_ij);
       mul<0, 3>(dP_ij, dP_ij, P_ij);
       copy<0, 2>(dP_ij_bf16, dP_ij);
@@ -1184,10 +1174,12 @@ __global__ __attribute__((amdgpu_num_vgpr(30))) void attend_bwd_combined_ker(con
       load<2, 0>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       load<2, 1>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       mma_ABt<0, 0, 1>(P_ij, Q_i, K_j, P_ij);
+      mul<0, 0>(dQ_i_T, dQ_i_T, scale_factor);
       mma_ABt<0, 0, 2>(P_ij, Q_i, K_j, P_ij);
       load<2, 2>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       load<2, 3>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       mma_ABt<0, 0, 3>(P_ij, Q_i, K_j, P_ij);
+      mul<1, 0>(dQ_i_T, dQ_i_T, scale_factor);
       mma_ABt<0, 1, 0>(P_ij, Q_i, K_j);
       load<3, 0>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       load<3, 1>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
@@ -1300,8 +1292,6 @@ __global__ __attribute__((amdgpu_num_vgpr(30))) void attend_bwd_combined_ker(con
       load<1, 0>(K_j_col, subtile_inplace<256, 32>(K_j_smem, {0, warpid}), K_j_col_addr);
       load<1, 1>(K_j_col, subtile_inplace<256, 32>(K_j_smem, {0, warpid}), K_j_col_addr);
       mma_AtB<1, 1, 0>(dV_j_T, dO_i_col, P_ij_bf16_col, dV_j_T);
-      mul<0, 0>(dP_ij, dP_ij, scale_factor);
-      mul<0, 1>(dP_ij, dP_ij, scale_factor);
       mul<0, 0>(dP_ij, dP_ij, P_ij);
       mul<0, 1>(dP_ij, dP_ij, P_ij);
       copy<0, 0>(dP_ij_bf16, dP_ij);
@@ -1318,8 +1308,6 @@ __global__ __attribute__((amdgpu_num_vgpr(30))) void attend_bwd_combined_ker(con
       atomic_pk_add_bf16_with_warpid<2>(g.dQg, dQ_i, {batch_idx, last_q_head_idx, last_q_seq_idx * 4 + 3, 0}, warpid);
       mma_AtB<2, 1, 0>(dV_j_T, dO_i_col, P_ij_bf16_col, dV_j_T);
       sub_row<0, 3, delta_i>(dP_ij, dP_ij);
-      mul<0, 2>(dP_ij, dP_ij, scale_factor);
-      mul<0, 3>(dP_ij, dP_ij, scale_factor);
       mul<0, 2>(dP_ij, dP_ij, P_ij);
       mul<0, 3>(dP_ij, dP_ij, P_ij);
       copy<0, 2>(dP_ij_bf16, dP_ij);
@@ -1423,10 +1411,12 @@ __global__ __attribute__((amdgpu_num_vgpr(30))) void attend_bwd_combined_ker(con
       load<2, 0>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       load<2, 1>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       mma_ABt<0, 0, 1>(P_ij, Q_i, K_j, P_ij);
+      mul<0, 0>(dQ_i_T, dQ_i_T, scale_factor);
       mma_ABt<0, 0, 2>(P_ij, Q_i, K_j, P_ij);
       load<2, 2>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       load<2, 3>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       mma_ABt<0, 0, 3>(P_ij, Q_i, K_j, P_ij);
+      mul<1, 0>(dQ_i_T, dQ_i_T, scale_factor);
       mma_ABt<0, 1, 0>(P_ij, Q_i, K_j);
       load<3, 0>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       load<3, 1>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
@@ -1539,8 +1529,6 @@ __global__ __attribute__((amdgpu_num_vgpr(30))) void attend_bwd_combined_ker(con
       load<1, 0>(K_j_col, subtile_inplace<256, 32>(K_j_smem, {0, warpid}), K_j_col_addr);
       load<1, 1>(K_j_col, subtile_inplace<256, 32>(K_j_smem, {0, warpid}), K_j_col_addr);
       mma_AtB<1, 1, 0>(dV_j_T, dO_i_col, P_ij_bf16_col, dV_j_T);
-      mul<0, 0>(dP_ij, dP_ij, scale_factor);
-      mul<0, 1>(dP_ij, dP_ij, scale_factor);
       mul<0, 0>(dP_ij, dP_ij, P_ij);
       mul<0, 1>(dP_ij, dP_ij, P_ij);
       copy<0, 0>(dP_ij_bf16, dP_ij);
@@ -1557,8 +1545,6 @@ __global__ __attribute__((amdgpu_num_vgpr(30))) void attend_bwd_combined_ker(con
       atomic_pk_add_bf16_with_warpid<2>(g.dQg, dQ_i, {batch_idx, q_head_idx, q_seq_idx * 4 + 0, 0}, warpid);
       mma_AtB<2, 1, 0>(dV_j_T, dO_i_col, P_ij_bf16_col, dV_j_T);
       sub_row<0, 3, delta_i>(dP_ij, dP_ij);
-      mul<0, 2>(dP_ij, dP_ij, scale_factor);
-      mul<0, 3>(dP_ij, dP_ij, scale_factor);
       mul<0, 2>(dP_ij, dP_ij, P_ij);
       mul<0, 3>(dP_ij, dP_ij, P_ij);
       copy<0, 2>(dP_ij_bf16, dP_ij);
@@ -1661,10 +1647,12 @@ __global__ __attribute__((amdgpu_num_vgpr(30))) void attend_bwd_combined_ker(con
       load<2, 0>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       load<2, 1>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       mma_ABt<0, 0, 1>(P_ij, Q_i, K_j, P_ij);
+      mul<0, 0>(dQ_i_T, dQ_i_T, scale_factor);
       mma_ABt<0, 0, 2>(P_ij, Q_i, K_j, P_ij);
       load<2, 2>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       load<2, 3>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       mma_ABt<0, 0, 3>(P_ij, Q_i, K_j, P_ij);
+      mul<1, 0>(dQ_i_T, dQ_i_T, scale_factor);
       mma_ABt<0, 1, 0>(P_ij, Q_i, K_j);
       load<3, 0>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       load<3, 1>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
@@ -1777,8 +1765,6 @@ __global__ __attribute__((amdgpu_num_vgpr(30))) void attend_bwd_combined_ker(con
       load<1, 0>(K_j_col, subtile_inplace<256, 32>(K_j_smem, {0, warpid}), K_j_col_addr);
       load<1, 1>(K_j_col, subtile_inplace<256, 32>(K_j_smem, {0, warpid}), K_j_col_addr);
       mma_AtB<1, 1, 0>(dV_j_T, dO_i_col, P_ij_bf16_col, dV_j_T);
-      mul<0, 0>(dP_ij, dP_ij, scale_factor);
-      mul<0, 1>(dP_ij, dP_ij, scale_factor);
       mul<0, 0>(dP_ij, dP_ij, P_ij);
       mul<0, 1>(dP_ij, dP_ij, P_ij);
       copy<0, 0>(dP_ij_bf16, dP_ij);
@@ -1795,8 +1781,6 @@ __global__ __attribute__((amdgpu_num_vgpr(30))) void attend_bwd_combined_ker(con
       atomic_pk_add_bf16_with_warpid<2>(g.dQg, dQ_i, {batch_idx, q_head_idx, q_seq_idx * 4 + 1, 0}, warpid);
       mma_AtB<2, 1, 0>(dV_j_T, dO_i_col, P_ij_bf16_col, dV_j_T);
       sub_row<0, 3, delta_i>(dP_ij, dP_ij);
-      mul<0, 2>(dP_ij, dP_ij, scale_factor);
-      mul<0, 3>(dP_ij, dP_ij, scale_factor);
       mul<0, 2>(dP_ij, dP_ij, P_ij);
       mul<0, 3>(dP_ij, dP_ij, P_ij);
       copy<0, 2>(dP_ij_bf16, dP_ij);
@@ -1899,10 +1883,12 @@ __global__ __attribute__((amdgpu_num_vgpr(30))) void attend_bwd_combined_ker(con
       load<2, 0>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       load<2, 1>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       mma_ABt<0, 0, 1>(P_ij, Q_i, K_j, P_ij);
+      mul<0, 0>(dQ_i_T, dQ_i_T, scale_factor);
       mma_ABt<0, 0, 2>(P_ij, Q_i, K_j, P_ij);
       load<2, 2>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       load<2, 3>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       mma_ABt<0, 0, 3>(P_ij, Q_i, K_j, P_ij);
+      mul<1, 0>(dQ_i_T, dQ_i_T, scale_factor);
       mma_ABt<0, 1, 0>(P_ij, Q_i, K_j);
       load<3, 0>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       load<3, 1>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
@@ -2015,8 +2001,6 @@ __global__ __attribute__((amdgpu_num_vgpr(30))) void attend_bwd_combined_ker(con
       load<1, 0>(K_j_col, subtile_inplace<256, 32>(K_j_smem, {0, warpid}), K_j_col_addr);
       load<1, 1>(K_j_col, subtile_inplace<256, 32>(K_j_smem, {0, warpid}), K_j_col_addr);
       mma_AtB<1, 1, 0>(dV_j_T, dO_i_col, P_ij_bf16_col, dV_j_T);
-      mul<0, 0>(dP_ij, dP_ij, scale_factor);
-      mul<0, 1>(dP_ij, dP_ij, scale_factor);
       mul<0, 0>(dP_ij, dP_ij, P_ij);
       mul<0, 1>(dP_ij, dP_ij, P_ij);
       copy<0, 0>(dP_ij_bf16, dP_ij);
@@ -2033,8 +2017,6 @@ __global__ __attribute__((amdgpu_num_vgpr(30))) void attend_bwd_combined_ker(con
       atomic_pk_add_bf16_with_warpid<2>(g.dQg, dQ_i, {batch_idx, q_head_idx, q_seq_idx * 4 + 2, 0}, warpid);
       mma_AtB<2, 1, 0>(dV_j_T, dO_i_col, P_ij_bf16_col, dV_j_T);
       sub_row<0, 3, delta_i>(dP_ij, dP_ij);
-      mul<0, 2>(dP_ij, dP_ij, scale_factor);
-      mul<0, 3>(dP_ij, dP_ij, scale_factor);
       mul<0, 2>(dP_ij, dP_ij, P_ij);
       mul<0, 3>(dP_ij, dP_ij, P_ij);
       copy<0, 2>(dP_ij_bf16, dP_ij);
@@ -2126,14 +2108,13 @@ __global__ __attribute__((amdgpu_num_vgpr(30))) void attend_bwd_combined_ker(con
     }
   }
 
+  const int last_q_head_idx = (num_steps - 2) / num_steps_per_head + first_q_head;
+  const int last_q_seq_idx = (num_steps - 2) % num_steps_per_head;
+
+  const int q_head_idx = (num_steps - 1) / num_steps_per_head + first_q_head;
+  const int q_seq_idx = (num_steps - 1) % num_steps_per_head;
   // Epilogue
   {
-    const int last_q_head_idx = (num_steps - 2) / num_steps_per_head + first_q_head;
-    const int last_q_seq_idx = (num_steps - 2) % num_steps_per_head;
-
-    const int q_head_idx = (num_steps - 1) / num_steps_per_head + first_q_head;
-    const int q_seq_idx = (num_steps - 1) % num_steps_per_head;
-
     // dot slice 0
     {
 
@@ -2146,10 +2127,12 @@ __global__ __attribute__((amdgpu_num_vgpr(30))) void attend_bwd_combined_ker(con
       load<2, 0>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       load<2, 1>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       mma_ABt<0, 0, 1>(P_ij, Q_i, K_j, P_ij);
+      mul<0, 0>(dQ_i_T, dQ_i_T, scale_factor);
       mma_ABt<0, 0, 2>(P_ij, Q_i, K_j, P_ij);
       load<2, 2>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       load<2, 3>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       mma_ABt<0, 0, 3>(P_ij, Q_i, K_j, P_ij);
+      mul<1, 0>(dQ_i_T, dQ_i_T, scale_factor);
       mma_ABt<0, 1, 0>(P_ij, Q_i, K_j);
       load<3, 0>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       load<3, 1>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
@@ -2262,8 +2245,6 @@ __global__ __attribute__((amdgpu_num_vgpr(30))) void attend_bwd_combined_ker(con
       load<1, 0>(K_j_col, subtile_inplace<256, 32>(K_j_smem, {0, warpid}), K_j_col_addr);
       load<1, 1>(K_j_col, subtile_inplace<256, 32>(K_j_smem, {0, warpid}), K_j_col_addr);
       mma_AtB<1, 1, 0>(dV_j_T, dO_i_col, P_ij_bf16_col, dV_j_T);
-      mul<0, 0>(dP_ij, dP_ij, scale_factor);
-      mul<0, 1>(dP_ij, dP_ij, scale_factor);
       mul<0, 0>(dP_ij, dP_ij, P_ij);
       mul<0, 1>(dP_ij, dP_ij, P_ij);
       copy<0, 0>(dP_ij_bf16, dP_ij);
@@ -2280,8 +2261,6 @@ __global__ __attribute__((amdgpu_num_vgpr(30))) void attend_bwd_combined_ker(con
       atomic_pk_add_bf16_with_warpid<2>(g.dQg, dQ_i, {batch_idx, last_q_head_idx, last_q_seq_idx * 4 + 3, 0}, warpid);
       mma_AtB<2, 1, 0>(dV_j_T, dO_i_col, P_ij_bf16_col, dV_j_T);
       sub_row<0, 3, delta_i>(dP_ij, dP_ij);
-      mul<0, 2>(dP_ij, dP_ij, scale_factor);
-      mul<0, 3>(dP_ij, dP_ij, scale_factor);
       mul<0, 2>(dP_ij, dP_ij, P_ij);
       mul<0, 3>(dP_ij, dP_ij, P_ij);
       copy<0, 2>(dP_ij_bf16, dP_ij);
@@ -2383,10 +2362,12 @@ __global__ __attribute__((amdgpu_num_vgpr(30))) void attend_bwd_combined_ker(con
       load<2, 0>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       load<2, 1>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       mma_ABt<0, 0, 1>(P_ij, Q_i, K_j, P_ij);
+      mul<0, 0>(dQ_i_T, dQ_i_T, scale_factor);
       mma_ABt<0, 0, 2>(P_ij, Q_i, K_j, P_ij);
       load<2, 2>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       load<2, 3>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       mma_ABt<0, 0, 3>(P_ij, Q_i, K_j, P_ij);
+      mul<1, 0>(dQ_i_T, dQ_i_T, scale_factor);
       mma_ABt<0, 1, 0>(P_ij, Q_i, K_j);
       load<3, 0>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       load<3, 1>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
@@ -2499,8 +2480,6 @@ __global__ __attribute__((amdgpu_num_vgpr(30))) void attend_bwd_combined_ker(con
       load<1, 0>(K_j_col, subtile_inplace<256, 32>(K_j_smem, {0, warpid}), K_j_col_addr);
       load<1, 1>(K_j_col, subtile_inplace<256, 32>(K_j_smem, {0, warpid}), K_j_col_addr);
       mma_AtB<1, 1, 0>(dV_j_T, dO_i_col, P_ij_bf16_col, dV_j_T);
-      mul<0, 0>(dP_ij, dP_ij, scale_factor);
-      mul<0, 1>(dP_ij, dP_ij, scale_factor);
       mul<0, 0>(dP_ij, dP_ij, P_ij);
       mul<0, 1>(dP_ij, dP_ij, P_ij);
       copy<0, 0>(dP_ij_bf16, dP_ij);
@@ -2517,8 +2496,6 @@ __global__ __attribute__((amdgpu_num_vgpr(30))) void attend_bwd_combined_ker(con
       atomic_pk_add_bf16_with_warpid<2>(g.dQg, dQ_i, {batch_idx, q_head_idx, q_seq_idx * 4, 0}, warpid);
       mma_AtB<2, 1, 0>(dV_j_T, dO_i_col, P_ij_bf16_col, dV_j_T);
       sub_row<0, 3, delta_i>(dP_ij, dP_ij);
-      mul<0, 2>(dP_ij, dP_ij, scale_factor);
-      mul<0, 3>(dP_ij, dP_ij, scale_factor);
       mul<0, 2>(dP_ij, dP_ij, P_ij);
       mul<0, 3>(dP_ij, dP_ij, P_ij);
       copy<0, 2>(dP_ij_bf16, dP_ij);
@@ -2620,10 +2597,12 @@ __global__ __attribute__((amdgpu_num_vgpr(30))) void attend_bwd_combined_ker(con
       load<2, 0>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       load<2, 1>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       mma_ABt<0, 0, 1>(P_ij, Q_i, K_j, P_ij);
+      mul<0, 0>(dQ_i_T, dQ_i_T, scale_factor);
       mma_ABt<0, 0, 2>(P_ij, Q_i, K_j, P_ij);
       load<2, 2>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       load<2, 3>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       mma_ABt<0, 0, 3>(P_ij, Q_i, K_j, P_ij);
+      mul<1, 0>(dQ_i_T, dQ_i_T, scale_factor);
       mma_ABt<0, 1, 0>(P_ij, Q_i, K_j);
       load<3, 0>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       load<3, 1>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
@@ -2736,8 +2715,6 @@ __global__ __attribute__((amdgpu_num_vgpr(30))) void attend_bwd_combined_ker(con
       load<1, 0>(K_j_col, subtile_inplace<256, 32>(K_j_smem, {0, warpid}), K_j_col_addr);
       load<1, 1>(K_j_col, subtile_inplace<256, 32>(K_j_smem, {0, warpid}), K_j_col_addr);
       mma_AtB<1, 1, 0>(dV_j_T, dO_i_col, P_ij_bf16_col, dV_j_T);
-      mul<0, 0>(dP_ij, dP_ij, scale_factor);
-      mul<0, 1>(dP_ij, dP_ij, scale_factor);
       mul<0, 0>(dP_ij, dP_ij, P_ij);
       mul<0, 1>(dP_ij, dP_ij, P_ij);
       copy<0, 0>(dP_ij_bf16, dP_ij);
@@ -2754,8 +2731,6 @@ __global__ __attribute__((amdgpu_num_vgpr(30))) void attend_bwd_combined_ker(con
       atomic_pk_add_bf16_with_warpid<2>(g.dQg, dQ_i, {batch_idx, q_head_idx, q_seq_idx * 4 + 1, 0}, warpid);
       mma_AtB<2, 1, 0>(dV_j_T, dO_i_col, P_ij_bf16_col, dV_j_T);
       sub_row<0, 3, delta_i>(dP_ij, dP_ij);
-      mul<0, 2>(dP_ij, dP_ij, scale_factor);
-      mul<0, 3>(dP_ij, dP_ij, scale_factor);
       mul<0, 2>(dP_ij, dP_ij, P_ij);
       mul<0, 3>(dP_ij, dP_ij, P_ij);
       copy<0, 2>(dP_ij_bf16, dP_ij);
@@ -2858,10 +2833,12 @@ __global__ __attribute__((amdgpu_num_vgpr(30))) void attend_bwd_combined_ker(con
       load<2, 0>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       load<2, 1>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       mma_ABt<0, 0, 1>(P_ij, Q_i, K_j, P_ij);
+      mul<0, 0>(dQ_i_T, dQ_i_T, scale_factor);
       mma_ABt<0, 0, 2>(P_ij, Q_i, K_j, P_ij);
       load<2, 2>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       load<2, 3>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       mma_ABt<0, 0, 3>(P_ij, Q_i, K_j, P_ij);
+      mul<1, 0>(dQ_i_T, dQ_i_T, scale_factor);
       mma_ABt<0, 1, 0>(P_ij, Q_i, K_j);
       load<3, 0>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
       load<3, 1>(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}), K_j_addr);
@@ -2974,8 +2951,6 @@ __global__ __attribute__((amdgpu_num_vgpr(30))) void attend_bwd_combined_ker(con
       load<1, 0>(K_j_col, subtile_inplace<256, 32>(K_j_smem, {0, warpid}), K_j_col_addr);
       load<1, 1>(K_j_col, subtile_inplace<256, 32>(K_j_smem, {0, warpid}), K_j_col_addr);
       mma_AtB<1, 1, 0>(dV_j_T, dO_i_col, P_ij_bf16_col, dV_j_T);
-      mul<0, 0>(dP_ij, dP_ij, scale_factor);
-      mul<0, 1>(dP_ij, dP_ij, scale_factor);
       mul<0, 0>(dP_ij, dP_ij, P_ij);
       mul<0, 1>(dP_ij, dP_ij, P_ij);
       copy<0, 0>(dP_ij_bf16, dP_ij);
@@ -2992,8 +2967,6 @@ __global__ __attribute__((amdgpu_num_vgpr(30))) void attend_bwd_combined_ker(con
       atomic_pk_add_bf16_with_warpid<2>(g.dQg, dQ_i, {batch_idx, q_head_idx, q_seq_idx * 4 + 2, 0}, warpid);
       mma_AtB<2, 1, 0>(dV_j_T, dO_i_col, P_ij_bf16_col, dV_j_T);
       sub_row<0, 3, delta_i>(dP_ij, dP_ij);
-      mul<0, 2>(dP_ij, dP_ij, scale_factor);
-      mul<0, 3>(dP_ij, dP_ij, scale_factor);
       mul<0, 2>(dP_ij, dP_ij, P_ij);
       mul<0, 3>(dP_ij, dP_ij, P_ij);
       copy<0, 2>(dP_ij_bf16, dP_ij);
@@ -3074,7 +3047,6 @@ __global__ __attribute__((amdgpu_num_vgpr(30))) void attend_bwd_combined_ker(con
       // ds_read_b128 a[24:27]
       // ds_read_b128 a[28:31]
       mma_AtB<1, 0, 7>(dQ_i_T, K_j_col, dP_ij_bf16_col_T, dQ_i_T);
-      atomic_pk_add_bf16_with_warpid<2>(g.dQg, dQ_i, {batch_idx, q_head_idx, q_seq_idx * 4 + 3, 0}, warpid);
       asm volatile("s_waitcnt lgkmcnt(2)");
     }
   }
@@ -3085,7 +3057,13 @@ __global__ __attribute__((amdgpu_num_vgpr(30))) void attend_bwd_combined_ker(con
 
   // We first copy dV_j_T from accumulator GPRs to vector GPRs and then perform the store
   accvgpr_read(dV_j_T, dK_j_T);
+  mul(dV_j_T, dV_j_T, scale_factor);
   store<1>(g.dKg, dV_j, {batch_idx, 0, kv_head_idx, 0}, {0, j, 0, 0});
+
+  mul<0, 0>(dQ_i_T, dQ_i_T, scale_factor);
+  mul<1, 0>(dQ_i_T, dQ_i_T, scale_factor);
+  atomic_pk_add_bf16_with_warpid<2>(g.dQg, dQ_i, {batch_idx, q_head_idx, q_seq_idx * 4 + 3, 0}, warpid);
+
 }
 
 template<int D>
