@@ -5,6 +5,8 @@ import tk_kernel_fwd
 import tk_kernel_bkwd
 import tk_kernel_bkwd_prep
 import time
+import sys
+import os
 
 use_aiter = True
 if use_aiter:
@@ -25,8 +27,8 @@ torch.set_printoptions(
 # Benchmarking
 # **************************************************
 
-num_warmup = 5
-num_iters = 50
+num_warmup = 100
+num_iters = 500
 start_event = torch.cuda.Event(enable_timing=True) # in milliseconds
 end_event = torch.cuda.Event(enable_timing=True)
 
@@ -140,6 +142,8 @@ dtype = torch.bfloat16
 mean = 10
 std = 0.1  
 
+tk_kernel_name = sys.argv[1] if len(sys.argv) > 1 else "tk_kernel_bkwd"
+
 flops_ref = flops(b, n, h_q, d, causal, mode="bwd")  # Use query heads for FLOP calculation
 
 def generate_tensor(shape, mean, std, dtype, device):
@@ -203,10 +207,6 @@ if use_aiter:
     k_grad_aiter_bnhd = K_aiter.grad  
     v_grad_aiter_bnhd = V_aiter.grad
     out_aiter_bnhd = out_aiter
-    # out_aiter_bhnd = out_aiter.transpose(1, 2)  # BNHD -> BHND
-    # q_grad_aiter_bhnd = q_grad_aiter_bnhd.transpose(1, 2)  # BNHD -> BHND
-    # k_grad_aiter_bhnd = k_grad_aiter_bnhd.transpose(1, 2)  # BNHD -> BHND
-    # v_grad_aiter_bhnd = v_grad_aiter_bnhd.transpose(1, 2)  # BNHD -> BHND
 
 # **************************************************
 # ThunderKittens
@@ -364,3 +364,35 @@ print(f"K grad: max_abs={k_diff.max().item():.6f}, max_rel={k_rel_error:.4f}, "
 print(f"V grad: max_abs={v_diff.max().item():.6f}, max_rel={v_rel_error:.4f}, "
       f"rel_l2={v_l2_error:.4f}, cos={v_cos:.6f}, "
       f"errors={v_err_cnt}/{v_total} ({100*v_err_cnt/v_total:.4f}%)")
+
+############ LOGGING OUTPUTS #############
+
+data_to_log = {
+    "B": b,
+    "H_Q": h_q,
+    "H_KV": h_kv,
+    "N": n,
+    "D": d,
+    "Causal": causal,
+    "avg_time_ref": avg_time_aiter,
+    "tflops_ref": eff_aiter,
+    "avg_time_tk": avg_time_tk,
+    "tflops_tk": eff_tk,
+}
+
+import json
+
+if not os.path.exists("data_to_log.json"):
+    with open("data_to_log.json", "w") as f:
+        json.dump({}, f, indent=4)
+
+with open("data_to_log.json", "r") as f:
+    data = json.load(f)
+    data[tk_kernel_name] = data_to_log
+
+with open("data_to_log.json", "w") as f:
+    json.dump(data, f, indent=4)
+
+print(f"Results saved to data_to_log.json")
+
+############ END LOGGING OUTPUTS #############

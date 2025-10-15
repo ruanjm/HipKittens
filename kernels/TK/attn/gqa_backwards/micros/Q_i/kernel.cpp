@@ -30,9 +30,12 @@ void micro_tk(const micro_globals<D> g) {
 
     st_bf<SLICE_QO, D, st_16x32_s> (&Q_i_smem) = al.allocate<st_bf<SLICE_QO, D, st_16x32_s>>();
 
+    using Q_ranges = ducks::rt::split_many_t<ducks::rt::type_list<ducks::rt::range<368, 383>>, 4>; // 16 registers
+    ducks::rt::clobber<Q_ranges>();
+
     // Register tiles
-    qo_tile<D, bf16, row_l, rt_16x32_s> Q_i;
-    qo_tile<D, bf16, col_l, rt_16x32_s> Q_i_col;
+    rt<bf16, DOT_SLICE_QO, D, row_l, rt_16x32_s, Q_ranges> Q_i; // 16 registers
+    rt<bf16, DOT_SLICE_QO, D, col_l, rt_16x32_s, Q_ranges> Q_i_col; // 16 registers
 
     const int warpid = kittens::warpid();
 
@@ -53,9 +56,9 @@ void micro_tk(const micro_globals<D> g) {
     __builtin_amdgcn_sched_barrier(0);
 
     #ifdef COL
-    store<1>(g.out, Q_i_col, {0, 0, 0, 0});
+    store<1>(g.out, Q_i_col, {0, 0, 0, 0}, {0, 0, 0, 0});
     #else
-    store<1>(g.out, Q_i, {0, 0, 0, 0});
+    store<1>(g.out, Q_i, {0, 0, 0, 0}, {0, 0, 0, 0});
     #endif
 
     __builtin_amdgcn_s_waitcnt(0);
@@ -73,9 +76,9 @@ void micro_tk(const micro_globals<D> g) {
     __builtin_amdgcn_sched_barrier(0);
 
     #ifdef COL
-    store<1>(g.out, Q_i_col, {0, 1, 0, 0});
+    store<1>(g.out, Q_i_col, {0, 1, 0, 0}, {0, 0, 0, 0});
     #else
-    store<1>(g.out, Q_i, {0, 1, 0, 0});
+    store<1>(g.out, Q_i, {0, 1, 0, 0}, {0, 0, 0, 0});
     #endif
 }
 

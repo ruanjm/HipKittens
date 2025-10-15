@@ -6,9 +6,6 @@ constexpr int ATTN_D = 128; // dimension
 constexpr int BLOCK_SIZE_KV = 256; // block size for KV
 constexpr int WARP_SIZE_KV = 64; // warp size for KV
 
-template<int D, typename T=bf16, typename L=row_l, typename S=rt_16x32_s> using kv_tile = rt<T, WARP_SIZE_KV, D, L, S>;
-template<int D, typename T=bf16, typename L=col_l, typename S=rt_32x16_4_s> using kv_tile_dq = rt<T, 256, 32, L, S>;
-
 #define NUM_WARPS 4
 #define NUM_THREADS (kittens::WARP_THREADS * NUM_WARPS)
 
@@ -28,9 +25,12 @@ void micro_tk(const micro_globals<D> g) {
     shared_allocator al((int*)&__shm[0]);
     st_bf<BLOCK_SIZE_KV, D, st_16x16_s> (&K_j_smem) = al.allocate<st_bf<BLOCK_SIZE_KV, D, st_16x16_s>>();
 
+    using K_ranges = ducks::rt::split_many_t<ducks::rt::type_list<ducks::rt::range<112, 127>, ducks::rt::range<256, 303>>, 4>; // 64 registers
+    ducks::rt::clobber<K_ranges>();
+
     // Register tiles
-    kv_tile<D> K_j;
-    kv_tile_dq<D> K_j_col; // for dq
+    rt<bf16, WARP_SIZE_KV, D, row_l, rt_16x32_s, K_ranges> K_j; // 64 registers
+    rt<bf16, 256, 32, col_l, rt_32x16_4_s, K_ranges> K_j_col; // 64 registers // for dq
 
     const int warpid = kittens::warpid();
 
@@ -41,15 +41,15 @@ void micro_tk(const micro_globals<D> g) {
     __builtin_amdgcn_sched_barrier(0);
 
     // Load K_j from SMEM to registers  
-    // load(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}));
-    load(K_j_col, subtile_inplace<256, 32>(K_j_smem, {0, warpid}));
+    load(K_j, subtile_inplace<WARP_SIZE_KV, D>(K_j_smem, {warpid, 0}));
+    // load(K_j_col, subtile_inplace<256, 32>(K_j_smem, {0, warpid}));
     __builtin_amdgcn_s_waitcnt(0);
     __builtin_amdgcn_s_barrier();
     __builtin_amdgcn_sched_barrier(0);
 
     // Store K_j to output
-    // store<1>(g.out, K_j, {0, warpid, 0, 0});
-    store<1>(g.out, K_j_col, {0, 0, 0, warpid});
+    store<1>(g.out, K_j, {0, 0, 0, 0}, {0, warpid, 0, 0});
+    // store<1>(g.out, K_j_col, {0, 0, 0, 0}, {0, 0, 0, warpid});
     __builtin_amdgcn_s_waitcnt(0);
     __builtin_amdgcn_s_barrier();
     __builtin_amdgcn_sched_barrier(0);

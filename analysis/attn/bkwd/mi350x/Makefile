@@ -1,8 +1,8 @@
 # Compiler
 GPU_TARGET=CDNA4
 
-TARGET=tk_kernel_bkwd
-SRC=GQA_bkwd_4warps.cpp
+TARGETS=tk_kernel_bkwd
+SRC_bkwd=GQA_bkwd_asm_interleaved.cpp
 
 # HIP variables
 ROCM_INSTALL_DIR := $(ROCM_PATH)
@@ -40,16 +40,17 @@ ICXXFLAGS+= -I${THUNDERKITTENS_ROOT}/include -I${THUNDERKITTENS_ROOT}/prototype 
 
 
 # Default target
-all: $(TARGET)
+all: $(TARGETS)
 
 LOGDIR := /workdir/data_logs/$(shell date +%m%d_%H%M%S)_outputs
 LOGFILE := $(LOGDIR)/make_build.log
 
-$(TARGET): $(SRC)
+# Pattern rule to build each binary
+$(TARGETS):
 	@mkdir -p $(LOGDIR)
-	$(HIPCXX) $(SRC) $(HIPFLAGS) $(ICXXFLAGS) $(ICPPFLAGS) $(ILDFLAGS) \
-	    -o $(TARGET)$(shell python3-config --extension-suffix) 2>&1 | tee $(LOGFILE)
+	$(HIPCXX) $($(subst tk_kernel_,SRC_,$@)) $(HIPFLAGS) $(ICXXFLAGS) $(ICPPFLAGS) \
+	    -o $@$(shell python3-config --extension-suffix) 2>&1 | tee $(LOGFILE)
 
 # Clean target
 clean:
-	rm -f $(TARGET)
+	rm -f $(TARGETS)
