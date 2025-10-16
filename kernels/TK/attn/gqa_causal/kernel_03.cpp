@@ -18,11 +18,11 @@ using _gl_QKVO = gl<bf16, -1, -1, -1, -1>;
 
 using G = kittens::group<NUM_WARPS>;
 
-template<int D, typename T=bf16, typename L=row_l> using qo_tile = rt<T, Q_BLOCK_SIZE, D, L>;
-template<int D, typename T=bf16, typename L=col_l> using qo_tile_transposed = rt<T, D, Q_BLOCK_SIZE, L>;
-template<int D, typename T=bf16, typename L=row_l> using kv_tile = rt<T, KV_BLOCK_SIZE, D, L>;
-template<int D, typename T=bf16, typename L=col_l> using kv_tile_transposed = rt<T, D, KV_BLOCK_SIZE, L>;
-template<int D, typename T=float, typename L=accum_col_l> using attn_tile = rt<T, KV_BLOCK_SIZE, Q_BLOCK_SIZE, L>;
+template<int D, typename T=bf16, typename L=row_l, typename S=rt_32x16_s> using qo_tile = rt<T, Q_BLOCK_SIZE, D, L, S>;
+template<int D, typename T=bf16, typename L=col_l, typename S=rt_16x32_s> using qo_tile_transposed = rt<T, D, Q_BLOCK_SIZE, L, S>;
+template<int D, typename T=bf16, typename L=row_l, typename S=rt_32x16_s> using kv_tile = rt<T, KV_BLOCK_SIZE, D, L, S>;
+template<int D, typename T=bf16, typename L=col_l, typename S=rt_16x32_s> using kv_tile_transposed = rt<T, D, KV_BLOCK_SIZE, L, S>;
+template<int D, typename T=float, typename L=col_l, typename S=rt_16x32_4_s> using attn_tile = rt<T, KV_BLOCK_SIZE, Q_BLOCK_SIZE, L, S>;
 
 
 /**********************************************************/
@@ -46,7 +46,7 @@ __device__ inline void mask_vec2_imm(uint32_t rel_vgpr, uint32_t neg_inf_vgpr,
     x_ref = ox; y_ref = oy;
 }
 
-template<ducks::rt::accumulator_col_layout RT>
+template<ducks::rt::col_layout RT>
 __device__ inline void mask_kv_tile(RT &dst, int q_abs, int k_abs) {
     // Lane geometry
     const int lane = laneid();
@@ -125,8 +125,8 @@ __global__ void attend_ker(const attn_globals<D> g) {
 
     extern __shared__ alignment_dummy __shm[];
     shared_allocator al((int*)&__shm[0]);
-    st_bf<KV_BLOCK_SIZE, ATTN_D, ducks::st_layout::row> (&k_smem)[2] = al.allocate<st_bf<KV_BLOCK_SIZE, ATTN_D, ducks::st_layout::row>, 2>();
-    st_bf<KV_BLOCK_SIZE, ATTN_D, ducks::st_layout::accumulator_col> (&v_smem)[2] = al.allocate<st_bf<KV_BLOCK_SIZE, ATTN_D, ducks::st_layout::accumulator_col>, 2>();
+    st_bf<KV_BLOCK_SIZE, ATTN_D, st_32x32_s> (&k_smem)[2] = al.allocate<st_bf<KV_BLOCK_SIZE, ATTN_D, st_32x32_s>, 2>();
+    st_bf<KV_BLOCK_SIZE, ATTN_D, st_8x32_s> (&v_smem)[2] = al.allocate<st_bf<KV_BLOCK_SIZE, ATTN_D, st_8x32_s>, 2>();
      
     const int head_idx = (blockIdx.x % 8) * 8 + (blockIdx.x / 8);
     const int batch_idx = blockIdx.z;
@@ -139,24 +139,24 @@ __global__ void attend_ker(const attn_globals<D> g) {
     int k_idx_buf0 = -1, k_idx_buf1 = -1;
     int k_curr_idx = -1; 
 
-    /********** Readfirstlane hoisting **********/
-    // Create base buffer resources once
-    const bf16* k_base = (bf16*)&g.Kg[{batch_idx, 0, head_idx_kv, 0}];
-    const bf16* v_base = (bf16*)&g.Vg[{batch_idx, 0, head_idx_kv, 0}];
-    const int k_row_stride = g.Kg.template stride<1>() * sizeof(bf16);
-    const int v_row_stride = g.Vg.template stride<1>() * sizeof(bf16);
-    i32x4 k_srsrc_base = make_srsrc(k_base, k_row_stride * ATTN_N, k_row_stride);
-    i32x4 v_srsrc_base = make_srsrc(v_base, v_row_stride * ATTN_N, v_row_stride);
-    // Broadcast to SGPRs 
-    const int32_t ks0 = __builtin_amdgcn_readfirstlane(k_srsrc_base.x);
-    const int32_t ks1 = __builtin_amdgcn_readfirstlane(k_srsrc_base.y);
-    const int32_t ks2 = __builtin_amdgcn_readfirstlane(k_srsrc_base.z);
-    const int32_t ks3 = __builtin_amdgcn_readfirstlane(k_srsrc_base.w);
-    const int32_t vs0 = __builtin_amdgcn_readfirstlane(v_srsrc_base.x);
-    const int32_t vs1 = __builtin_amdgcn_readfirstlane(v_srsrc_base.y); 
-    const int32_t vs2 = __builtin_amdgcn_readfirstlane(v_srsrc_base.z);
-    const int32_t vs3 = __builtin_amdgcn_readfirstlane(v_srsrc_base.w);
-    /********** Swizzle **********/
+    // /********** Readfirstlane hoisting **********/
+    // // Create base buffer resources once
+    // const bf16* k_base = (bf16*)&g.Kg[{batch_idx, 0, head_idx_kv, 0}];
+    // const bf16* v_base = (bf16*)&g.Vg[{batch_idx, 0, head_idx_kv, 0}];
+    // const int k_row_stride = g.Kg.template stride<1>() * sizeof(bf16);
+    // const int v_row_stride = g.Vg.template stride<1>() * sizeof(bf16);
+    // i32x4 k_srsrc_base = make_srsrc(k_base, k_row_stride * ATTN_N, k_row_stride);
+    // i32x4 v_srsrc_base = make_srsrc(v_base, v_row_stride * ATTN_N, v_row_stride);
+    // // Broadcast to SGPRs 
+    // const int32_t ks0 = __builtin_amdgcn_readfirstlane(k_srsrc_base.x);
+    // const int32_t ks1 = __builtin_amdgcn_readfirstlane(k_srsrc_base.y);
+    // const int32_t ks2 = __builtin_amdgcn_readfirstlane(k_srsrc_base.z);
+    // const int32_t ks3 = __builtin_amdgcn_readfirstlane(k_srsrc_base.w);
+    // const int32_t vs0 = __builtin_amdgcn_readfirstlane(v_srsrc_base.x);
+    // const int32_t vs1 = __builtin_amdgcn_readfirstlane(v_srsrc_base.y); 
+    // const int32_t vs2 = __builtin_amdgcn_readfirstlane(v_srsrc_base.z);
+    // const int32_t vs3 = __builtin_amdgcn_readfirstlane(v_srsrc_base.w);
+    // /********** Swizzle **********/
 
     constexpr int num_tiles = ATTN_N / KV_BLOCK_SIZE;
     const int max_tile_idx = block_tile_idx * NUM_WARPS + NUM_WARPS - 1;
@@ -174,23 +174,23 @@ __global__ void attend_ker(const attn_globals<D> g) {
     qo_tile_transposed<D, bf16> q_reg_transposed;
     kv_tile<D, bf16> k_reg;
     kv_tile_transposed<D, bf16> k_reg_transposed;
-    kv_tile<D, bf16, accum_col_l> v_reg;
-    qo_tile_transposed<D, float, accum_col_l> o_reg; // Output tile.
-    attn_tile<D, float, accum_col_l> att_block[2]; // attention tile, in float.
-    attn_tile<D, bf16, accum_col_l> att_block_bf16;
-    typename attn_tile<D, float, accum_col_l>::row_vec max_vec, norm_vec, max_vec_prev;
+    kv_tile<D, bf16, col_l, rt_32x32_s> v_reg;
+    qo_tile_transposed<D, float, col_l, rt_32x32_s> o_reg; // Output tile.
+    attn_tile<D, float, col_l, rt_32x32_s> att_block[2]; // attention tile, in float.
+    attn_tile<D, bf16, col_l, rt_32x32_s> att_block_bf16;
+    typename attn_tile<D, float, col_l, rt_32x32_s>::row_vec max_vec, norm_vec, max_vec_prev;
 
-    using T = typename st_bf<KV_BLOCK_SIZE, ATTN_D>::dtype;
-    constexpr int bytes_per_thread = 16;
+    using T = typename st_bf<KV_BLOCK_SIZE, ATTN_D, st_32x32_s>::dtype;
+    constexpr int bytes_per_thread = st_32x32_s::template bytes_per_thread<T>();
     constexpr int bytes_per_memcpy = bytes_per_thread * NUM_THREADS;
     constexpr int memcpy_per_tile = KV_BLOCK_SIZE * ATTN_D * sizeof(T) / bytes_per_memcpy;
     uint32_t swizzled_offsets_V[memcpy_per_tile];
     uint32_t swizzled_offsets_K[memcpy_per_tile];
     G::prefill_swizzled_offsets<1, false>(k_smem[0], g.Kg, swizzled_offsets_K);
     G::prefill_swizzled_offsets<1, false>(v_smem[0], g.Vg, swizzled_offsets_V);
-    const lds_lane_ofs lane_offs = prefill_swizzled_offsets(k_reg, k_smem[0]);
+    // const lds_lane_ofs lane_offs = prefill_swizzled_offsets(k_reg, k_smem[0]);
 
-    G::load<1, false>(k_smem[0], g.Kg, {batch_idx, 0, head_idx_kv, 0}, swizzled_offsets_K, (uint32_t)ks0, (uint32_t)ks1, (uint32_t)ks2, (uint32_t)ks3, k_base);
+    G::load<1, false>(k_smem[0], g.Kg, {batch_idx, 0, head_idx_kv, 0}, swizzled_offsets_K);
     __builtin_amdgcn_s_waitcnt(0);
     __builtin_amdgcn_sched_barrier(0);
     __builtin_amdgcn_s_barrier();
@@ -206,10 +206,10 @@ __global__ void attend_ker(const attn_globals<D> g) {
     neg_infty(max_vec_prev);
 
     // All warps then collaboratively load in the first slice of V (V0) and the second slice of K (K1) into shared memory
-    G::load<1, false>(k_smem[1], g.Kg, {batch_idx, 1, head_idx_kv, 0}, swizzled_offsets_K, (uint32_t)ks0, (uint32_t)ks1, (uint32_t)ks2, (uint32_t)ks3, k_base);
+    G::load<1, false>(k_smem[1], g.Kg, {batch_idx, 1, head_idx_kv, 0}, swizzled_offsets_K);
     // All warps then load in the first slice of K (K0)
-    G::load<1, false>(v_smem[0], g.Vg, {batch_idx, 0, head_idx_kv, 0}, swizzled_offsets_V, (uint32_t)vs0, (uint32_t)vs1, (uint32_t)vs2, (uint32_t)vs3, v_base);
-    load(k_reg, k_smem[0], lane_offs);
+    G::load<1, false>(v_smem[0], g.Vg, {batch_idx, 0, head_idx_kv, 0}, swizzled_offsets_V);
+    load(k_reg, k_smem[0]);
     k_idx_buf1 = 1; 
     k_curr_idx = 0;
     asm volatile("s_waitcnt lgkmcnt(0)");
@@ -242,11 +242,11 @@ __global__ void attend_ker(const attn_globals<D> g) {
     }
 
     // All warps then load in the second slice of K (K1)
-    load(k_reg, k_smem[1], lane_offs);
+    load(k_reg, k_smem[1]);
     // All warps then collaboratively load in the third slice of K (K2) into shared memory
-    G::load<1, false>(k_smem[0], g.Kg, {batch_idx, 2, head_idx_kv, 0}, swizzled_offsets_K, (uint32_t)ks0, (uint32_t)ks1, (uint32_t)ks2, (uint32_t)ks3, k_base);
+    G::load<1, false>(k_smem[0], g.Kg, {batch_idx, 2, head_idx_kv, 0}, swizzled_offsets_K);
     // All warps then collaboratively load in the second slice of V (V1) into shared memory 
-    G::load<1, false>(v_smem[1], g.Vg, {batch_idx, 1, head_idx_kv, 0}, swizzled_offsets_V, (uint32_t)vs0, (uint32_t)vs1, (uint32_t)vs2, (uint32_t)vs3, v_base);
+    G::load<1, false>(v_smem[1], g.Vg, {batch_idx, 1, head_idx_kv, 0}, swizzled_offsets_V);
     k_curr_idx = 1; 
     k_idx_buf0 = 2;
     asm volatile("s_waitcnt lgkmcnt(0)");
@@ -271,7 +271,7 @@ __global__ void attend_ker(const attn_globals<D> g) {
         // Cluster 1: ALL warps must participate in collective loads
         // Load K(j) if in bounds, otherwise repeat a safe index
         load(v_reg, v_smem[0]);
-        G::load<1, false>(k_smem[1], g.Kg, {batch_idx, j, head_idx_kv, 0}, swizzled_offsets_K, (uint32_t)ks0, (uint32_t)ks1, (uint32_t)ks2, (uint32_t)ks3, k_base);
+        G::load<1, false>(k_smem[1], g.Kg, {batch_idx, j, head_idx_kv, 0}, swizzled_offsets_K);
         k_idx_buf1 = j;
         asm volatile("s_waitcnt lgkmcnt(0)");
         asm volatile("s_waitcnt vmcnt(4)");
@@ -299,9 +299,9 @@ __global__ void attend_ker(const attn_globals<D> g) {
         // Cluster 3: Loads
         //      Load K2 into registers
         zero(att_block[0]);
-        load(k_reg, k_smem[0], lane_offs);
+        load(k_reg, k_smem[0]);
         //      Load V2 into shared
-        G::load<1, false>(v_smem[0], g.Vg, {batch_idx, j - 1, head_idx_kv, 0}, swizzled_offsets_V, (uint32_t)vs0, (uint32_t)vs1, (uint32_t)vs2, (uint32_t)vs3, v_base);
+        G::load<1, false>(v_smem[0], g.Vg, {batch_idx, j - 1, head_idx_kv, 0}, swizzled_offsets_V);
         k_curr_idx = k_idx_buf0;
         asm volatile("s_waitcnt lgkmcnt(0)");
         asm volatile("s_waitcnt vmcnt(4)");
@@ -325,7 +325,7 @@ __global__ void attend_ker(const attn_globals<D> g) {
         //      Load V1 into registers
         load(v_reg, v_smem[1]);
         //      Load K4 into shared
-        G::load<1, false>(k_smem[0], g.Kg, {batch_idx, j + 1, head_idx_kv, 0}, swizzled_offsets_K, (uint32_t)ks0, (uint32_t)ks1, (uint32_t)ks2, (uint32_t)ks3, k_base);
+        G::load<1, false>(k_smem[0], g.Kg, {batch_idx, j + 1, head_idx_kv, 0}, swizzled_offsets_K);
         k_idx_buf0 = j + 1;
         asm volatile("s_waitcnt lgkmcnt(0)");
         asm volatile("s_waitcnt vmcnt(4)");
@@ -354,10 +354,10 @@ __global__ void attend_ker(const attn_globals<D> g) {
     
         // Cluster 7: Loads
         //      Load K3 into registers
-        load(k_reg, k_smem[1], lane_offs);
+        load(k_reg, k_smem[1]);
         zero(att_block[1]);
         //      Load V3 into shared
-        G::load<1, false>(v_smem[1], g.Vg, {batch_idx, j, head_idx_kv, 0}, swizzled_offsets_V, (uint32_t)vs0, (uint32_t)vs1, (uint32_t)vs2, (uint32_t)vs3, v_base);
+        G::load<1, false>(v_smem[1], g.Vg, {batch_idx, j, head_idx_kv, 0}, swizzled_offsets_V);
         k_curr_idx = k_idx_buf1;
         asm volatile("s_waitcnt lgkmcnt(0)");
         asm volatile("s_waitcnt vmcnt(4)");
@@ -383,7 +383,7 @@ __global__ void attend_ker(const attn_globals<D> g) {
 
     // Cluster 1:
     //      Load K5 into shared
-    G::load<1, false>(k_smem[1], g.Kg, {batch_idx, max_num_tiles - 1, head_idx_kv, 0}, swizzled_offsets_K, (uint32_t)ks0, (uint32_t)ks1, (uint32_t)ks2, (uint32_t)ks3, k_base);
+    G::load<1, false>(k_smem[1], g.Kg, {batch_idx, max_num_tiles - 1, head_idx_kv, 0}, swizzled_offsets_K);
     k_idx_buf1 = max_num_tiles - 1;
     //      Load V2 into registers
     load(v_reg, v_smem[0]);
@@ -412,9 +412,9 @@ __global__ void attend_ker(const attn_globals<D> g) {
 
     // Cluster 3:
     //      Load V4 into shared
-    G::load<1, false>(v_smem[0], g.Vg, {batch_idx, max_num_tiles - 2, head_idx_kv, 0}, swizzled_offsets_V, (uint32_t)vs0, (uint32_t)vs1, (uint32_t)vs2, (uint32_t)vs3, v_base);
+    G::load<1, false>(v_smem[0], g.Vg, {batch_idx, max_num_tiles - 2, head_idx_kv, 0}, swizzled_offsets_V);
     //      Load K4 into registers
-    load(k_reg, k_smem[0], lane_offs);
+    load(k_reg, k_smem[0]);
     k_curr_idx = k_idx_buf0;
     asm volatile("s_waitcnt lgkmcnt(0)");
     asm volatile("s_waitcnt vmcnt(4)");
@@ -464,9 +464,9 @@ __global__ void attend_ker(const attn_globals<D> g) {
 
     // Cluster 7:
     //      Load V5 into shared
-    G::load<1, false>(v_smem[1], g.Vg, {batch_idx, max_num_tiles - 1, head_idx_kv, 0}, swizzled_offsets_V, (uint32_t)vs0, (uint32_t)vs1, (uint32_t)vs2, (uint32_t)vs3, v_base);
+    G::load<1, false>(v_smem[1], g.Vg, {batch_idx, max_num_tiles - 1, head_idx_kv, 0}, swizzled_offsets_V);
     //      Load K5 into registers
-    load(k_reg, k_smem[1], lane_offs);
+    load(k_reg, k_smem[1]);
     k_curr_idx = k_idx_buf1;
     asm volatile("s_waitcnt lgkmcnt(0)");
     asm volatile("s_waitcnt vmcnt(2)");
@@ -540,7 +540,7 @@ __global__ void attend_ker(const attn_globals<D> g) {
         __builtin_amdgcn_s_barrier();
     }
 
-    qo_tile<D, float, accum_row_l> o_reg_transposed;
+    qo_tile<D, float, row_l, rt_32x32_s> o_reg_transposed;
     swap_layout_and_transpose(o_reg_transposed, o_reg);
     store<1>(g.Og, o_reg_transposed, {batch_idx, tile_idx, head_idx, 0});
 
