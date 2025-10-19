@@ -1,0 +1,42 @@
+{
+    "1024": {
+        "avg_time_pytorch": 0.21213873946666717,
+        "tflops_pytorch": 1.2653768787109183,
+        "avg_time_compiled": 0.14874250435829162,
+        "tflops_compiled": 1.8046990479156615,
+        "avg_time_tk": 0.1379476760774851,
+        "tflops_tk": 1.94592227743815
+    },
+    "2048": {
+        "avg_time_pytorch": 0.46611580020189286,
+        "tflops_pytorch": 1.1517972824938787,
+        "avg_time_compiled": 0.26612248545885087,
+        "tflops_compiled": 2.0173827516841434,
+        "avg_time_tk": 0.2383215218782425,
+        "tflops_tk": 2.2527168665626647
+    },
+    "4096": {
+        "avg_time_pytorch": 0.9109401979446411,
+        "tflops_pytorch": 1.1787182368531863,
+        "avg_time_compiled": 0.5122649599313736,
+        "tflops_compiled": 2.0960672854607227,
+        "avg_time_tk": 0.440740026652813,
+        "tflops_tk": 2.4362248923804364
+    },
+    "8192": {
+        "avg_time_pytorch": 1.8219677641391754,
+        "tflops_pytorch": 1.1786617141465294,
+        "avg_time_compiled": 0.9959473891258239,
+        "tflops_compiled": 2.156221976629627,
+        "avg_time_tk": 0.8812932008504868,
+        "tflops_tk": 2.436741422636171
+    },
+    "16384": {
+        "avg_time_pytorch": 3.6989645919799803,
+        "tflops_pytorch": 1.1611269016503323,
+        "avg_time_compiled": 1.9991123900413512,
+        "tflops_compiled": 2.1484371350983222,
+        "avg_time_tk": 1.767497629880905,
+        "tflops_tk": 2.4299706112134345
+    }
+}
