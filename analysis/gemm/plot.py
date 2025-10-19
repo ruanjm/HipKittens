@@ -2,7 +2,7 @@ import json
 import matplotlib.pyplot as plt
 import numpy as np
 
-colors = ["#8E69B8", "#E59952", "#68AC5A", "#7CB9BC", "#D84A4A", "#4A8ED8", "#FF6B9D"]
+colors = ["#8E69B8", "#E59952", "#68AC5A", "#7CB9BC", "#DE836B", "#55555A"]
 
 
 mi355x_baselines = {
@@ -13,13 +13,6 @@ mi355x_baselines = {
         "8192": 1143.91,
         "16384": 1087.09,
     },
-    # "rocblas": {
-    #     "1024": 158.84,
-    #     "2048": 318,
-    #     "4096": 1201,
-    #     "8192": 1303,
-    #     "16384": 1301,
-    # },
     "hipblaslt": {
         "1024": 165.829,
         "2048": 598.810,
@@ -51,13 +44,6 @@ mi350x_baselines = {
         "8192": 0,
         "16384": 0,
     },
-    # "rocblas": {
-    #     "1024": 0,
-    #     "2048": 0,
-    #     "4096": 0,
-    #     "8192": 0,
-    #     "16384": 0,
-    # },
     "ck": {
         "1024": 0,
         "2048": 0,
@@ -125,16 +111,21 @@ for device in ['mi300x', 'mi325x', 'mi350x', 'mi355x']:
 
     # Create bar chart
     x = np.arange(len(matrix_sizes))
-    width = 0.12
+    width = 0.145
 
-    fig, ax = plt.subplots(figsize=(12, 6))
-    bars0 = ax.bar(x - 3*width, pytorch_vals, width, label='PyTorch', color=colors[0])
-    bars1 = ax.bar(x - 2*width, aiter_vals, width, label='AITER (AMD)', color=colors[1])
-    bars2 = ax.bar(x - width, hipblaslt_vals, width, label='HipblasLT', color=colors[2])
-    bars3 = ax.bar(x, tk_vals, width, label='HipKittens', color=colors[3])
-    bars4 = ax.bar(x + width, triton_vals, width, label='Triton', color=colors[4])
-    # bars5 = ax.bar(x + 2*width, rocblas_vals, width, label='rocBLAS', color=colors[5])
-    bars6 = ax.bar(x + 3*width, ck_vals, width, label='Composable Kernel', color=colors[6])
+    fig, ax = plt.subplots(figsize=(15, 6))
+    first_bar = x - 3*width
+    second_bar = x - 2*width
+    third_bar = x - width
+    fourth_bar = x
+    fifth_bar = x + width
+    sixth_bar = x + 2*width
+    bars0 = ax.bar(first_bar, pytorch_vals, width, label='PyTorch', color=colors[4])
+    bars1 = ax.bar(fifth_bar, aiter_vals, width, label='AITER (AMD)', color=colors[0])
+    bars2 = ax.bar(fourth_bar, hipblaslt_vals, width, label='HipblasLT', color=colors[5])
+    bars3 = ax.bar(sixth_bar, tk_vals, width, label='HipKittens', color=colors[3])
+    bars4 = ax.bar(second_bar, triton_vals, width, label='Triton', color=colors[2])
+    bars5 = ax.bar(third_bar, ck_vals, width, label='Composable Kernel', color=colors[1])
 
     # Plot X markers for OOM
     oom_height = max_tflops * 0.95
@@ -159,56 +150,46 @@ for device in ['mi300x', 'mi325x', 'mi350x', 'mi355x']:
         ax.plot(x[idx] + width, oom_height, 'x', color=colors[4], markersize=15, markeredgewidth=3)
         ax.text(x[idx] + width, oom_height + max_tflops * 0.03, 'OOM', ha='center', va='bottom', fontsize=10, color=colors[4])
 
-    # for idx in rocblas_oom:
-    #     ax.plot(x[idx] + 2*width, oom_height, 'x', color=colors[5], markersize=15, markeredgewidth=3)
-    #     ax.text(x[idx] + 2*width, oom_height + max_tflops * 0.03, 'OOM', ha='center', va='bottom', fontsize=10, color=colors[5])
-
     for idx in ck_oom:
-        ax.plot(x[idx] + 3*width, oom_height, 'x', color=colors[6], markersize=15, markeredgewidth=3)
-        ax.text(x[idx] + 3*width, oom_height + max_tflops * 0.03, 'OOM', ha='center', va='bottom', fontsize=10, color=colors[6])
+        ax.plot(x[idx] + 2*width, oom_height, 'x', color=colors[5], markersize=15, markeredgewidth=3)
+        ax.text(x[idx] + 2*width, oom_height + max_tflops * 0.03, 'OOM', ha='center', va='bottom', fontsize=10, color=colors[5])
 
     # Add value labels on bars
     for bar, value in zip(bars0, pytorch_vals):
         if value > 0:
             height = bar.get_height()
             ax.text(bar.get_x() + bar.get_width()/2., height + max_tflops * 0.01,
-                    f'{value:.0f}', ha='center', va='bottom', fontsize=12)
+                    f'{value:.0f}', ha='center', va='bottom', fontsize=10)
 
     for bar, value in zip(bars1, aiter_vals):
         if value > 0:
             height = bar.get_height()
             ax.text(bar.get_x() + bar.get_width()/2., height + max_tflops * 0.01,
-                    f'{value:.0f}', ha='center', va='bottom', fontsize=12)
+                    f'{value:.0f}', ha='center', va='bottom', fontsize=10)
 
     for bar, value in zip(bars2, hipblaslt_vals):
         if value > 0:
             height = bar.get_height()
             ax.text(bar.get_x() + bar.get_width()/2., height + max_tflops * 0.01,
-                    f'{value:.0f}', ha='center', va='bottom', fontsize=12)
+                    f'{value:.0f}', ha='center', va='bottom', fontsize=10)
 
     for bar, value in zip(bars3, tk_vals):
         if value > 0:
             height = bar.get_height()
             ax.text(bar.get_x() + bar.get_width()/2., height + max_tflops * 0.01,
-                    f'{value:.0f}', ha='center', va='bottom', fontsize=12)
+                    f'{value:.0f}', ha='center', va='bottom', fontsize=10)
 
     for bar, value in zip(bars4, triton_vals):
         if value > 0:
             height = bar.get_height()
             ax.text(bar.get_x() + bar.get_width()/2., height + max_tflops * 0.01,
-                    f'{value:.0f}', ha='center', va='bottom', fontsize=12)
+                    f'{value:.0f}', ha='center', va='bottom', fontsize=10)
 
-    # for bar, value in zip(bars5, rocblas_vals):
-    #     if value > 0:
-    #         height = bar.get_height()
-    #         ax.text(bar.get_x() + bar.get_width()/2., height + max_tflops * 0.01,
-    #                 f'{value:.0f}', ha='center', va='bottom', fontsize=12)
-
-    for bar, value in zip(bars6, ck_vals):
+    for bar, value in zip(bars5, ck_vals):
         if value > 0:
             height = bar.get_height()
             ax.text(bar.get_x() + bar.get_width()/2., height + max_tflops * 0.01,
-                    f'{value:.0f}', ha='center', va='bottom', fontsize=12)
+                    f'{value:.0f}', ha='center', va='bottom', fontsize=10)
 
     # add some padding to the top of the y-axis to prevent label overlap
     ax.set_ylim(0, max_tflops * 1.15)
