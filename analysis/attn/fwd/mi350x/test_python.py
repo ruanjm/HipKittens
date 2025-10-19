@@ -8,9 +8,6 @@ import os
 from torch.nn.functional import scaled_dot_product_attention
 import aiter
 
-profiling = True
-using_aiter = True
-
 torch.manual_seed(0)
 random.seed(0)
 
@@ -64,12 +61,8 @@ def robustness_check(ref, pred):
     return diff, error_count, numel, rel_error, l2_error, cos, mask  
 
 
-if profiling:
-    num_warmup = 500
-    num_iters = 100
-else:
-    num_warmup = 1
-    num_iters = 0
+num_warmup = 500
+num_iters = 100
 
 start_event = torch.cuda.Event(enable_timing=True) # in milliseconds
 end_event = torch.cuda.Event(enable_timing=True)
@@ -134,60 +127,48 @@ print(f"Average execution time: {avg_time:.4f} ms")
 print(f"Performance: {eff:.2f} TFLOPS for {N}x{N} matrix multiplication.\n")
 
 # Compare against reference
-if profiling:
-    # Compare against reference
-    num_print = 16
-    print(f"\n TK vs AITER comparison:")
-    print("\nO outputs:")
-    print("TK: ", out[0, 0, :num_print, 0], "Max:", out.max().item())
-    print("AITER: ", out_ref[0, 0, :num_print, 0], "Max:", out_ref.max().item())
+num_print = 16
+print(f"\n TK vs AITER comparison:")
+print("\nO outputs:")
+print("TK: ", out[0, 0, :num_print, 0], "Max:", out.max().item())
+print("AITER: ", out_ref[0, 0, :num_print, 0], "Max:", out_ref.max().item())
+print("\nLSE outputs:")
+print("TK: ", lse[0, 0, 0, :num_print], "Max:", lse.max().item())
+print("AITER: ", lse_ref[0, 0, :num_print], "Max:", lse_ref.max().item())
+print("Robustness check:")
+o_diff, o_err_cnt, o_total, o_rel_error, o_l2_error, o_cos, o_mask = robustness_check(out, out_ref)
+print(f"O: max_abs={o_diff.max().item():.6f}, max_rel={o_rel_error:.4f}, "
+    f"rel_l2={o_l2_error:.4f}, cos={o_cos:.6f}, "
+    f"errors={o_err_cnt}/{o_total} ({100*o_err_cnt/o_total:.4f}%)")
+l_diff, l_err_cnt, l_total, l_rel_error, l_l2_error, l_cos, l_mask = robustness_check(lse, lse_ref.unsqueeze(-1).transpose(-1, -2))
+print(f"LSE: max_abs={l_diff.max().item():.6f}, max_rel={l_rel_error:.4f}, "
+    f"rel_l2={l_l2_error:.4f}, cos={l_cos:.6f}, "
+    f"errors={l_err_cnt}/{l_total} ({100*l_err_cnt/l_total:.4f}%)")
 
-    print("\nLSE outputs:")
-    print("TK: ", lse[0, 0, 0, :num_print], "Max:", lse.max().item())
-    print("AITER: ", lse_ref[0, 0, :num_print], "Max:", lse_ref.max().item())
-
-    print("Robustness check:")
-    o_diff, o_err_cnt, o_total, o_rel_error, o_l2_error, o_cos, o_mask = robustness_check(out, out_ref)
-    print(f"O: max_abs={o_diff.max().item():.6f}, max_rel={o_rel_error:.4f}, "
-        f"rel_l2={o_l2_error:.4f}, cos={o_cos:.6f}, "
-        f"errors={o_err_cnt}/{o_total} ({100*o_err_cnt/o_total:.4f}%)")
-    l_diff, l_err_cnt, l_total, l_rel_error, l_l2_error, l_cos, l_mask = robustness_check(lse, lse_ref.unsqueeze(-1).transpose(-1, -2))
-    print(f"LSE: max_abs={l_diff.max().item():.6f}, max_rel={l_rel_error:.4f}, "
-        f"rel_l2={l_l2_error:.4f}, cos={l_cos:.6f}, "
-        f"errors={l_err_cnt}/{l_total} ({100*l_err_cnt/l_total:.4f}%)")
-
-    ############## LOGGING OUTPUTS ####################
-
-    max_error = o_diff.max().item()
-    mean_error = o_diff.mean().item()
-    error_count = o_err_cnt
-
-    data_to_log = {
-        "N": N,
-        "avg_time_ref": avg_time_ref,
-        "tflops_ref": eff_ref,
-        "avg_time": avg_time,
-        "tflops": eff,
-        "max_error": max_error,
-        "mean_error": mean_error,
-        "error_count": error_count,
-    }
-
-    import json
-
-    if not os.path.exists(filename):
-        with open(filename, "w") as f:
-            json.dump({}, f, indent=4)
-
-    with open(filename, "r") as f:
-        data = json.load(f)
-        data[str(N)] = data_to_log
-
+############## LOGGING OUTPUTS ####################
+max_error = o_diff.max().item()
+mean_error = o_diff.mean().item()
+error_count = o_err_cnt
+data_to_log = {
+    "N": N,
+    "avg_time_ref": avg_time_ref,
+    "tflops_ref": eff_ref,
+    "avg_time": avg_time,
+    "tflops": eff,
+    "max_error": max_error,
+    "mean_error": mean_error,
+    "error_count": error_count,
+}
+import json
+if not os.path.exists(filename):
     with open(filename, "w") as f:
-        json.dump(data, f, indent=4)
-
-    print(f"Results saved to {filename}")
-
-    ############## END LOGGING OUTPUTS ###############
+        json.dump({}, f, indent=4)
+with open(filename, "r") as f:
+    data = json.load(f)
+    data[str(N)] = data_to_log
+with open(filename, "w") as f:
+    json.dump(data, f, indent=4)
+print(f"Results saved to {filename}")
+############## END LOGGING OUTPUTS ###############
 
     

@@ -5,7 +5,6 @@ import os
 import tk_kernel
 import torch.nn as nn
 
-profiling = True
 torch.manual_seed(0)
 random.seed(0)
 
@@ -21,12 +20,10 @@ torch.random.manual_seed(42)
 x = torch.randn((B, N, D), dtype=torch.bfloat16, device='cuda').requires_grad_()
 residual = torch.randn((B, N, D), dtype=torch.bfloat16, device='cuda').requires_grad_()
 
-if profiling:
-    num_warmup = 100
-    num_iters = 500
-else:
-    num_warmup = 1
-    num_iters = 0
+filename = sys.argv[2]
+
+num_warmup = 100
+num_iters = 500
 
 start_event = torch.cuda.Event(enable_timing=True) # in milliseconds
 end_event = torch.cuda.Event(enable_timing=True)
@@ -120,50 +117,44 @@ speedup = avg_time_ref / avg_time_tk
 print(f"Speedup from TK: {speedup:.2f}x")
 
 # Compare against reference
-if profiling:
-    try:
-        C_float = o_tk.float()
-        C_ref_float = o_ref.float()
-        diff = (C_float - C_ref_float).abs()
-        max_error = diff.max().item()
-        mean_error = diff.mean().item()
-        error_count = (diff > 0.1).sum().item()
-        print(f"Max error between kernel and reference: {max_error}")
-        print(f"Max error: {max_error}")
-        print(f"Mean error: {mean_error}")
-        print(f"Number of large errors (>0.1): {error_count}\n")
-    except Exception as e:
-        print(f"Error comparing kernel and reference: {e}")
-        max_error = None
-        mean_error = None
-        error_count = None
+try:
+    C_float = o_tk.float()
+    C_ref_float = o_ref.float()
+    diff = (C_float - C_ref_float).abs()
+    max_error = diff.max().item()
+    mean_error = diff.mean().item()
+    error_count = (diff > 0.1).sum().item()
+    print(f"Max error between kernel and reference: {max_error}")
+    print(f"Max error: {max_error}")
+    print(f"Mean error: {mean_error}")
+    print(f"Number of large errors (>0.1): {error_count}\n")
+except Exception as e:
+    print(f"Error comparing kernel and reference: {e}")
+    max_error = None
+    mean_error = None
+    error_count = None
 
-    ############### LOGGING OUTPUTS ####################
+############### LOGGING OUTPUTS ####################
+data_to_log = {
+    "avg_time_pytorch": avg_time_ref,
+    "tflops_pytorch": eff,
+    "avg_time_compiled": avg_time_compiled,
+    "tflops_compiled": eff_compiled,
+    "avg_time_tk": avg_time_tk,
+    "tflops_tk": eff_tk,
+}
 
-    data_to_log = {
-        "avg_time_pytorch": avg_time_ref,
-        "tflops_pytorch": eff,
-        "avg_time_compiled": avg_time_compiled,
-        "tflops_compiled": eff_compiled,
-        "avg_time_tk": avg_time_tk,
-        "tflops_tk": eff_tk,
-    }
+import json
+if not os.path.exists(filename):
+    with open(filename, "w") as f:
+        json.dump({}, f, indent=4)
+with open(filename, "r") as f:
+    data = json.load(f)
+    data[str(N)] = data_to_log
+with open(filename, "w") as f:
+    json.dump(data, f, indent=4)
+print(f"Results saved to {filename}")
 
-    import json
 
-    if not os.path.exists("data_to_log.json"):
-        with open("data_to_log.json", "w") as f:
-            json.dump({}, f, indent=4)
-
-    with open("data_to_log.json", "r") as f:
-        data = json.load(f)
-        data[str(N)] = data_to_log
-
-    with open("data_to_log.json", "w") as f:
-        json.dump(data, f, indent=4)
-
-    print(f"Results saved to data_to_log.json")
-
-    ################ END LOGGING OUTPUTS ###############
 
     

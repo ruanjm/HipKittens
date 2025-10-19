@@ -89,19 +89,22 @@ __global__ void layernorm_tk(const norm_globals<D> g) {
     const int seq_start = blockIdx.x*g.n_per_tile;
 
     constexpr int d_model = D;
-    rv<bf16, d_model, naive_l> residual_s_reg, x_s_reg, norm_weight_s_reg, norm_bias_s_reg;
+    rv_naive<bf16, d_model> residual_s_reg, x_s_reg, norm_weight_s_reg, norm_bias_s_reg;
     load(x_s_reg, g.x, {0, batch, seq_start + warpid, 0});
- 
+    asm volatile("s_waitcnt vmcnt(0)");
+    load(residual_s_reg, g.residual, {0, batch, seq_start + warpid, 0});
     bf16 mean = __float2bfloat16(0.0f);
     bf16 var  = __float2bfloat16(0.0f);      
     if constexpr (DROPOUT_P > 0.0f) {
         dropout_mask(x_s_reg, DROPOUT_P); 
     }
-    load(residual_s_reg, g.residual, {0, batch, seq_start + warpid, 0});
     if constexpr (DROPOUT_P > 0.0f) {
         constexpr float scale = 1.0f / (1.0f - DROPOUT_P);
         mul(x_s_reg, x_s_reg, __float2bfloat16(scale));
     }
+    asm volatile("s_waitcnt vmcnt(0)");
+    load(norm_weight_s_reg, g.norm_weight, {0,0,0,0});
+    load(norm_bias_s_reg, g.norm_bias, {0,0,0,0});
     add(residual_s_reg, residual_s_reg, x_s_reg);   
     store(g.o_resid, residual_s_reg, {0, batch, seq_start + warpid, 0});
 
@@ -110,7 +113,6 @@ __global__ void layernorm_tk(const norm_globals<D> g) {
     constexpr float dim_scale = 1.0f / d_model;
     mean = mean * __float2bfloat16(dim_scale);
     sub(residual_s_reg, residual_s_reg, mean);  
-    load(norm_weight_s_reg, g.norm_weight, {0,0,0,0});
     mul(x_s_reg, residual_s_reg, residual_s_reg);
     sum(var, x_s_reg);
     var = var * __float2bfloat16(dim_scale);
@@ -118,7 +120,7 @@ __global__ void layernorm_tk(const norm_globals<D> g) {
 
     // compute norm
     div(residual_s_reg, residual_s_reg, var);
-    load(norm_bias_s_reg, g.norm_bias, {0,0,0,0});
+    asm volatile("s_waitcnt vmcnt(0)");
     mul(residual_s_reg, residual_s_reg, norm_weight_s_reg); 
     add(residual_s_reg, residual_s_reg, norm_bias_s_reg);
     store(g.o, residual_s_reg, {0, batch, seq_start+warpid, 0});
