@@ -440,36 +440,65 @@ __device__ inline static void store(const GL &dst, const RT &src, const COORD &i
 
 #ifdef KITTENS_CDNA4
 template<int axis, ducks::rt::accumulator_layout RT, ducks::gl::all GL, ducks::coord::tile COORD=coord<RT>>
-__device__ inline static void store(const GL &dst, const RT &src, const COORD &idx) {
+__device__ inline static void store(const GL &dst, const RT &src, const COORD &idx, const COORD &warp_idx) {
     using T = base_types::packing<typename RT::dtype>::unpacked_type;
+    using T2 = base_types::packing<typename RT::dtype>::packed_type;
     using U = typename GL::dtype;
+    using U2 = base_types::packing<U>::packed_type;
+
+    static_assert(std::is_same_v<U, bf16>, "atomic_pk_add_bf16 is only supported for bf16");
 
     U *dst_ptr = (U*)&dst[(idx.template unit_coord<axis, 3>())];
     const int row_stride = dst.template stride<axis>();
     int laneid = kittens::laneid();
 
-    int col_offset = laneid%16;
-    int row_offset = laneid/16;
+    const uint32_t buffer_size = row_stride * RT::rows * 2 * sizeof(U); 
+    std::uintptr_t as_int = reinterpret_cast<std::uintptr_t>(dst_ptr);
+    std::uint64_t  as_u64 = static_cast<std::uint64_t>(as_int);
+    buffer_resource br = make_buffer_resource(as_u64, buffer_size, 0x00020000);
+
+    int col_offset = (warp_idx.template unit_coord<axis, 3>()).c+(laneid/16)*4;
+    int row_offset = (warp_idx.template unit_coord<axis, 3>()).r+laneid%16;
 
     #pragma unroll
     for(int i = 0; i < src.height; i++) {
         #pragma unroll
         for(int j = 0; j < src.width; j++) {
-            int col = 16*j + col_offset;
-            int row = 16*i + row_offset * 4;
+            int col = 16*i + col_offset;
+            int row = 16*j + row_offset;
 
-            dst_ptr[(row+0)*row_stride + col] = base_types::convertor<U, T>::convert(src.tiles[i][j].data[0].x);
-            dst_ptr[(row+1)*row_stride + col] = base_types::convertor<U, T>::convert(src.tiles[i][j].data[0].y);
-            dst_ptr[(row+2)*row_stride + col] = base_types::convertor<U, T>::convert(src.tiles[i][j].data[1].x);
-            dst_ptr[(row+3)*row_stride + col] = base_types::convertor<U, T>::convert(src.tiles[i][j].data[1].y);
+            const U2 val_0 = base_types::convertor<U2, T2>::convert(src.tiles[i][j].data[0]);
+            const U2 val_1 = base_types::convertor<U2, T2>::convert(src.tiles[i][j].data[1]);
+
+            uint32_t byte_offset_0 = static_cast<uint32_t>((row * row_stride + col + 0) * sizeof(U));
+            uint32_t byte_offset_1 = static_cast<uint32_t>((row * row_stride + col + 2) * sizeof(U));
+
+            uint32_t val_0_bits = *reinterpret_cast<const uint32_t*>(&val_0);
+            uint32_t val_1_bits = *reinterpret_cast<const uint32_t*>(&val_1);
+
+            asm volatile(
+                "buffer_atomic_pk_add_bf16 %0, %1, %2, 0 offen\n"
+                :
+                : "v"(val_0_bits), "v"(byte_offset_0),      // %0, %1
+                  "s"(*(i32x4*)&br)                         // %8
+                : "memory"
+            );
+
+            asm volatile(
+                "buffer_atomic_pk_add_bf16 %0, %1, %2, 0 offen\n"
+                :
+                : "v"(val_1_bits), "v"(byte_offset_1),      // %2, %3
+                  "s"(*(i32x4*)&br)                         // %8
+                : "memory"
+            );
         }
     }
 }
 #endif
 
 template<ducks::rt::all RT, ducks::gl::all GL, ducks::coord::tile COORD=coord<RT>>
-__device__ inline static void store(const GL &dst, const RT &src, const COORD &idx) {
-    store<2, RT, GL, COORD>(dst, src, idx);
+__device__ inline static void store(const GL &dst, const RT &src, const COORD &idx, const COORD &warp_idx) {
+    store<2, RT, GL, COORD>(dst, src, idx, warp_idx);
 }
 
 }
