@@ -203,32 +203,32 @@ __global__ __launch_bounds__(256, 1) void matmul_device(const kittens::gl<fp8e4m
 
     int global_block_id = blockIdx.x / SPLITK;
     int global_k_id = blockIdx.x % SPLITK;
-    int row = global_block_id / blocks_col;
-    int col = global_block_id % blocks_col;
+    // int row = global_block_id / blocks_col;
+    // int col = global_block_id % blocks_col;
 
     int k_start = global_k_id * k_iters;
 
     // Original WGID.
-    // int wgid = global_block_id;
-    // const int NUM_WGS = gridDim.x;
-    // const int NUM_XCDS = 8;
-    // const int CUS_PER_XCD = 32;
-    // const int NUM_CUS = CUS_PER_XCD * NUM_XCDS;
-    // // Swizzle chiplet so that wgids are in the same XCD.
-    // wgid = (wgid % NUM_XCDS) * (NUM_WGS / NUM_XCDS) + (wgid / NUM_XCDS);
-    // // Swizzle for better L2 within the same XCD.
-    // const int WGM = 4;
-    // const int num_pid_m = (M + BLOCK_SIZE_ROW - 1) / BLOCK_SIZE_ROW;
-    // const int num_pid_n = (N + BLOCK_SIZE_COL - 1) / BLOCK_SIZE_COL;
-    // int num_wgid_in_group = WGM * num_pid_n;
-    // int group_id = wgid / num_wgid_in_group;
-    // int first_pid_m = group_id * WGM;
-    // int group_size_m = min(num_pid_m - first_pid_m, WGM);
-    // int pid_m = first_pid_m + ((wgid % num_wgid_in_group) % group_size_m);
-    // int pid_n = (wgid % num_wgid_in_group) / group_size_m;
-    // // Assign the tile's row/column based on the pid_m and pid_n.
-    // const int row = pid_m; // blockIdx.x
-    // const int col = pid_n; // blockIdx.y
+    int wgid = global_block_id;
+    const int NUM_WGS = gridDim.x / SPLITK;
+    const int NUM_XCDS = 4;
+    const int CUS_PER_XCD = 32;
+    const int NUM_CUS = CUS_PER_XCD * NUM_XCDS;
+    // Swizzle chiplet so that wgids are in the same XCD.
+    wgid = (wgid % NUM_XCDS) * (NUM_WGS / NUM_XCDS) + (wgid / NUM_XCDS);
+    // Swizzle for better L2 within the same XCD.
+    const int WGM = 4;
+    const int num_pid_m = (M + BLOCK_SIZE_ROW - 1) / BLOCK_SIZE_ROW;
+    const int num_pid_n = (N + BLOCK_SIZE_COL - 1) / BLOCK_SIZE_COL;
+    int num_wgid_in_group = WGM * num_pid_n;
+    int group_id = wgid / num_wgid_in_group;
+    int first_pid_m = group_id * WGM;
+    int group_size_m = min(num_pid_m - first_pid_m, WGM);
+    int pid_m = first_pid_m + ((wgid % num_wgid_in_group) % group_size_m);
+    int pid_n = (wgid % num_wgid_in_group) / group_size_m;
+    // Assign the tile's row/column based on the pid_m and pid_n.
+    const int row = pid_m; // blockIdx.x
+    const int col = pid_n; // blockIdx.y
 
     int curr = 0, next = 1;
 
