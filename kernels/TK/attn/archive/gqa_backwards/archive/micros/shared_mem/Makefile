@@ -2,7 +2,8 @@
 GPU_TARGET=CDNA4
 
 TARGET=tk_kernel
-SRC=kernel_v3.cpp
+SRC=micro.cpp
+
 # HIP variables
 ROCM_INSTALL_DIR := $(ROCM_PATH)
 HIP_INCLUDE_DIR  := $(ROCM_INSTALL_DIR)/include/hip
@@ -15,7 +16,7 @@ HIPFLAGS+= -DKITTENS_CDNA2 --offload-arch=gfx90a
 else ifeq ($(GPU_TARGET),CDNA3)
 HIPFLAGS+= -DKITTENS_CDNA3 --offload-arch=gfx942
 else ifeq ($(GPU_TARGET),CDNA4)
-HIPFLAGS+= -DKITTENS_CDNA4 --offload-arch=gfx950 -DHIP_ENABLE_WARP_SYNC_BUILTINS -ffast-math
+HIPFLAGS+= -DKITTENS_CDNA4 --offload-arch=gfx950 -DHIP_ENABLE_WARP_SYNC_BUILTINS -ffast-math 
 endif
 
 # Common variables and flags

@@ -1,8 +1,9 @@
 # Compiler
 GPU_TARGET=CDNA4
 
-TARGET=tk_kernel
-SRC=kernel_v3.cpp
+TARGET=tk_kernel_asm
+SRC=kernel_asm.cpp
+
 # HIP variables
 ROCM_INSTALL_DIR := $(ROCM_PATH)
 HIP_INCLUDE_DIR  := $(ROCM_INSTALL_DIR)/include/hip

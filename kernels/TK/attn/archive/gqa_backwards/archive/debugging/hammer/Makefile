@@ -2,7 +2,8 @@
 GPU_TARGET=CDNA4
 
 TARGET=tk_kernel
-SRC=kernel_v3.cpp
+SRC=hammer_fwd.cpp
+
 # HIP variables
 ROCM_INSTALL_DIR := $(ROCM_PATH)
 HIP_INCLUDE_DIR  := $(ROCM_INSTALL_DIR)/include/hip
@@ -15,7 +16,7 @@ HIPFLAGS+= -DKITTENS_CDNA2 --offload-arch=gfx90a
 else ifeq ($(GPU_TARGET),CDNA3)
 HIPFLAGS+= -DKITTENS_CDNA3 --offload-arch=gfx942
 else ifeq ($(GPU_TARGET),CDNA4)
-HIPFLAGS+= -DKITTENS_CDNA4 --offload-arch=gfx950 -DHIP_ENABLE_WARP_SYNC_BUILTINS -ffast-math
+HIPFLAGS+= -DKITTENS_CDNA4 --offload-arch=gfx950 -O3 -march=native -fopenmp -ffast-math #-DHIP_ENABLE_GFX950_OCP_BUILTINS
 endif
 
 # Common variables and flags
@@ -28,26 +29,31 @@ ILDLIBS   :=
 CXXFLAGS ?= -Wall -Wextra
 CXXFLAGS := -w
 
-ICXXFLAGS += $(CXXFLAGS)
+ICXXFLAGS += $(CXXFLAGS) 
 ICPPFLAGS += $(CPPFLAGS)
 ILDFLAGS  += $(LDFLAGS)
 ILDLIBS   += $(LDLIBS)
 
-PY_LDFLAGS := $(shell python3-config --ldflags | sed 's/-lcrypt//g')
-ICXXFLAGS += $(PY_LDFLAGS)
-ICXXFLAGS+= -I${THUNDERKITTENS_ROOT}/include -I${THUNDERKITTENS_ROOT}/prototype $(shell python3 -m pybind11 --includes) -shared -fPIC -Rpass-analysis=kernel-resource-usage
+# PY_LDFLAGS := $(shell python3-config --ldflags | sed 's/-lcrypt//g')
+# ICXXFLAGS += $(PY_LDFLAGS)
+# ICXXFLAGS+= -I${THUNDERKITTENS_ROOT}/include -I${THUNDERKITTENS_ROOT}/prototype $(shell python3 -m pybind11 --includes) -shared -fPIC -Rpass-analysis=kernel-resource-usage
+ICXXFLAGS+= -I${THUNDERKITTENS_ROOT}/include -I${THUNDERKITTENS_ROOT}/prototype -Rpass-analysis=kernel-resource-usage 
 
 
 # Default target
 all: $(TARGET)
 
-LOGDIR := /workdir/data_logs/$(shell date +%m%d_%H%M%S)_outputs
-LOGFILE := $(LOGDIR)/make_build.log
+# LOGDIR := data_logs/$(shell date +%m%d_%H%M%S)_outputs
+# LOGFILE := $(LOGDIR)/make_build.log
+# 
+# $(TARGET): $(SRC)
+# 	$(HIPCXX) $(SRC) $(HIPFLAGS) $(ICXXFLAGS) $(ICPPFLAGS) $(ILDFLAGS) \
+# 	    -o $(TARGET)$(shell python3-config --extension-suffix) 
 
 $(TARGET): $(SRC)
-	@mkdir -p $(LOGDIR)
 	$(HIPCXX) $(SRC) $(HIPFLAGS) $(ICXXFLAGS) $(ICPPFLAGS) $(ILDFLAGS) \
-	    -o $(TARGET)$(shell python3-config --extension-suffix) 2>&1 | tee $(LOGFILE)
+	    -o $(TARGET)
+
 
 # Clean target
 clean:

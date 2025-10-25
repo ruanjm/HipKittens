@@ -13,10 +13,12 @@ torch.set_printoptions(
     threshold=float("inf")  # print every element, no summarising "..."
 )
 
+torch.cuda.set_device(6)
+
 # Inputs
 B = 16
-H = 64
-H_KV = 8
+H = 16
+H_KV = 16
 N = 8192
 D = 128
 causal = False
@@ -47,8 +49,8 @@ def robustness_check(ref, pred):
     return diff, error_count, numel, rel_error, l2_error, cos, mask  
 
 
-num_warmup = 20
-num_iters = 20
+num_warmup = 500
+num_iters = 100
 
 start_event = torch.cuda.Event(enable_timing=True) # in milliseconds
 end_event = torch.cuda.Event(enable_timing=True)
@@ -85,8 +87,9 @@ for _ in range(num_warmup):
     out = torch.zeros(B, N, H, D, dtype=dtype, device='cuda', requires_grad=True)
     lse = torch.zeros(B, H, 1, N, dtype=torch.float32, device='cuda', requires_grad=True)
     q = torch.randn(B, N, H, D, dtype=dtype, device='cuda', requires_grad=True)
-    k = torch.randn(B, N, H_KV, D, dtype=dtype, device='cuda', requires_grad=True)
+    k = torch.randn(B, N, H_KV, D, dtype=dtype, device='cuda', requires_grad=True) 
     v = torch.randn(B, N, H_KV, D, dtype=dtype, device='cuda', requires_grad=True)
+    torch.cuda.synchronize()
     tk_kernel.dispatch_micro(q, k, v, out, lse)
 timings = []
 out = torch.zeros(B, N, H, D, dtype=dtype, device='cuda', requires_grad=True)
@@ -114,8 +117,8 @@ print(f"Performance: {eff:.2f} TFLOPS for {N}x{N} matrix multiplication.\n")
 num_print = 16
 print(f"\n TK vs AITER comparison:")
 print("\nO outputs:")
-print("TK: ", out[0, 0, :num_print, 0], "Max:", out.max().item())
-print("AITER: ", out_ref[0, 0, :num_print, 0], "Max:", out_ref.max().item())
+print("TK: ", out[0, 0, 0, :num_print], "Max:", out.max().item())
+print("AITER: ", out_ref[0, 0, 0, :num_print], "Max:", out_ref.max().item())
 
 print("\nLSE outputs:")
 print("TK: ", lse[0, 0, 0, :num_print], "Max:", lse.max().item())
