@@ -1,0 +1,92 @@
+Your branch is up to date with 'origin/asm_port'.
+/opt/rocm/bin/hipcc GQA_bkwd.cpp -DKITTENS_CDNA4 --offload-arch=gfx950 -DHIP_ENABLE_WARP_SYNC_BUILTINS -ffast-math -std=c++20 -w -L/opt/conda/envs/py_3.10/lib/python3.10/config-3.10-x86_64-linux-gnu -L/opt/conda/envs/py_3.10/lib   -lpthread -ldl  -lutil -lm -lm  -I/workdir/AMD-benchmarking-harness/ThunderKittens-HIP/include -I/workdir/AMD-benchmarking-harness/ThunderKittens-HIP/prototype -I/opt/conda/envs/py_3.10/include/python3.10 -I/opt/conda/envs/py_3.10/lib/python3.10/site-packages/pybind11/include -shared -fPIC -Rpass-analysis=kernel-resource-usage -I/workdir/AMD-benchmarking-harness/ThunderKittens-HIP/include -I/opt/rocm/include/hip  \
+    -o tk_kernel_bkwd.cpython-310-x86_64-linux-gnu.so 2>&1 | tee /workdir/data_logs/1019_085311_outputs/make_build.log
+GQA_bkwd.cpp:35:1: remark: Function Name: _Z23attend_bwd_combined_kerILi128EEv25attn_bwd_combined_globalsIXT_EE [-Rpass-analysis=kernel-resource-usage]
+   35 | __global__ __attribute__((amdgpu_num_vgpr(30))) void attend_bwd_combined_ker(const attn_bwd_combined_globals<D> g) {
+      | ^
+GQA_bkwd.cpp:35:1: remark:     SGPRs: 89 [-Rpass-analysis=kernel-resource-usage]
+GQA_bkwd.cpp:35:1: remark:     VGPRs: 256 [-Rpass-analysis=kernel-resource-usage]
+GQA_bkwd.cpp:35:1: remark:     AGPRs: 256 [-Rpass-analysis=kernel-resource-usage]
+GQA_bkwd.cpp:35:1: remark:     ScratchSize [bytes/lane]: 0 [-Rpass-analysis=kernel-resource-usage]
+GQA_bkwd.cpp:35:1: remark:     Dynamic Stack: False [-Rpass-analysis=kernel-resource-usage]
+GQA_bkwd.cpp:35:1: remark:     Occupancy [waves/SIMD]: 1 [-Rpass-analysis=kernel-resource-usage]
+GQA_bkwd.cpp:35:1: remark:     SGPRs Spill: 0 [-Rpass-analysis=kernel-resource-usage]
+GQA_bkwd.cpp:35:1: remark:     VGPRs Spill: 0 [-Rpass-analysis=kernel-resource-usage]
+GQA_bkwd.cpp:35:1: remark:     LDS Size [bytes/block]: 0 [-Rpass-analysis=kernel-resource-usage]
+Your branch is up to date with 'origin/port'.
+/opt/rocm/bin/hipcc GQA_bkwd_prep.cpp -DKITTENS_CDNA4 --offload-arch=gfx950 -DHIP_ENABLE_WARP_SYNC_BUILTINS -ffast-math -std=c++20 -w -L/opt/conda/envs/py_3.10/lib/python3.10/config-3.10-x86_64-linux-gnu -L/opt/conda/envs/py_3.10/lib   -lpthread -ldl  -lutil -lm -lm  -I/workdir/AMD-benchmarking-harness/ThunderKittens-HIP/include -I/workdir/AMD-benchmarking-harness/ThunderKittens-HIP/prototype -I/opt/conda/envs/py_3.10/include/python3.10 -I/opt/conda/envs/py_3.10/lib/python3.10/site-packages/pybind11/include -shared -fPIC -Rpass-analysis=kernel-resource-usage -I/workdir/AMD-benchmarking-harness/ThunderKittens-HIP/include -I/opt/rocm/include/hip  \
+    -o tk_kernel_bkwd_prep.cpython-310-x86_64-linux-gnu.so 2>&1 | tee /workdir/data_logs/1019_085321_outputs/make_build.log
+GQA_bkwd_prep.cpp:151:1: remark: Function Name: _Z15attend_prep_kerILi128EEv17attn_prep_globalsIXT_EE [-Rpass-analysis=kernel-resource-usage]
+  151 | __global__ void attend_prep_ker(const attn_prep_globals<D> g) {
+      | ^
+GQA_bkwd_prep.cpp:151:1: remark:     SGPRs: 30 [-Rpass-analysis=kernel-resource-usage]
+GQA_bkwd_prep.cpp:151:1: remark:     VGPRs: 66 [-Rpass-analysis=kernel-resource-usage]
+GQA_bkwd_prep.cpp:151:1: remark:     AGPRs: 0 [-Rpass-analysis=kernel-resource-usage]
+GQA_bkwd_prep.cpp:151:1: remark:     ScratchSize [bytes/lane]: 0 [-Rpass-analysis=kernel-resource-usage]
+GQA_bkwd_prep.cpp:151:1: remark:     Dynamic Stack: False [-Rpass-analysis=kernel-resource-usage]
+GQA_bkwd_prep.cpp:151:1: remark:     Occupancy [waves/SIMD]: 7 [-Rpass-analysis=kernel-resource-usage]
+GQA_bkwd_prep.cpp:151:1: remark:     SGPRs Spill: 0 [-Rpass-analysis=kernel-resource-usage]
+GQA_bkwd_prep.cpp:151:1: remark:     VGPRs Spill: 0 [-Rpass-analysis=kernel-resource-usage]
+GQA_bkwd_prep.cpp:151:1: remark:     LDS Size [bytes/block]: 0 [-Rpass-analysis=kernel-resource-usage]
+GQA_bkwd_prep.cpp:190:1: remark: Function Name: _Z21attend_dq_shuffle_kerILi128EEv23attn_dq_shuffle_globalsIXT_EE [-Rpass-analysis=kernel-resource-usage]
+  190 | __global__ void attend_dq_shuffle_ker(const attn_dq_shuffle_globals<D> g) {
+      | ^
+GQA_bkwd_prep.cpp:190:1: remark:     SGPRs: 30 [-Rpass-analysis=kernel-resource-usage]
+GQA_bkwd_prep.cpp:190:1: remark:     VGPRs: 29 [-Rpass-analysis=kernel-resource-usage]
+GQA_bkwd_prep.cpp:190:1: remark:     AGPRs: 0 [-Rpass-analysis=kernel-resource-usage]
+GQA_bkwd_prep.cpp:190:1: remark:     ScratchSize [bytes/lane]: 0 [-Rpass-analysis=kernel-resource-usage]
+GQA_bkwd_prep.cpp:190:1: remark:     Dynamic Stack: False [-Rpass-analysis=kernel-resource-usage]
+GQA_bkwd_prep.cpp:190:1: remark:     Occupancy [waves/SIMD]: 8 [-Rpass-analysis=kernel-resource-usage]
+GQA_bkwd_prep.cpp:190:1: remark:     SGPRs Spill: 0 [-Rpass-analysis=kernel-resource-usage]
+GQA_bkwd_prep.cpp:190:1: remark:     VGPRs Spill: 0 [-Rpass-analysis=kernel-resource-usage]
+GQA_bkwd_prep.cpp:190:1: remark:     LDS Size [bytes/block]: 0 [-Rpass-analysis=kernel-resource-usage]
+/opt/rocm/bin/hipcc GQA_fwd.cpp -DKITTENS_CDNA4 --offload-arch=gfx950 -DHIP_ENABLE_WARP_SYNC_BUILTINS -ffast-math -std=c++20 -w -L/opt/conda/envs/py_3.10/lib/python3.10/config-3.10-x86_64-linux-gnu -L/opt/conda/envs/py_3.10/lib   -lpthread -ldl  -lutil -lm -lm  -I/workdir/AMD-benchmarking-harness/ThunderKittens-HIP/include -I/workdir/AMD-benchmarking-harness/ThunderKittens-HIP/prototype -I/opt/conda/envs/py_3.10/include/python3.10 -I/opt/conda/envs/py_3.10/lib/python3.10/site-packages/pybind11/include -shared -fPIC -Rpass-analysis=kernel-resource-usage -I/workdir/AMD-benchmarking-harness/ThunderKittens-HIP/include -I/opt/rocm/include/hip  \
+    -o tk_kernel_fwd.cpython-310-x86_64-linux-gnu.so 2>&1 | tee /workdir/data_logs/1019_085326_outputs/make_build.log
+GQA_fwd.cpp:56:1: remark: Function Name: _Z10attend_kerILi128EEv12attn_globalsIXT_EE [-Rpass-analysis=kernel-resource-usage]
+   56 | __global__ void attend_ker(const attn_globals<D> g) {
+      | ^
+GQA_fwd.cpp:56:1: remark:     SGPRs: 62 [-Rpass-analysis=kernel-resource-usage]
+GQA_fwd.cpp:56:1: remark:     VGPRs: 248 [-Rpass-analysis=kernel-resource-usage]
+GQA_fwd.cpp:56:1: remark:     AGPRs: 0 [-Rpass-analysis=kernel-resource-usage]
+GQA_fwd.cpp:56:1: remark:     ScratchSize [bytes/lane]: 0 [-Rpass-analysis=kernel-resource-usage]
+GQA_fwd.cpp:56:1: remark:     Dynamic Stack: False [-Rpass-analysis=kernel-resource-usage]
+GQA_fwd.cpp:56:1: remark:     Occupancy [waves/SIMD]: 2 [-Rpass-analysis=kernel-resource-usage]
+GQA_fwd.cpp:56:1: remark:     SGPRs Spill: 0 [-Rpass-analysis=kernel-resource-usage]
+GQA_fwd.cpp:56:1: remark:     VGPRs Spill: 0 [-Rpass-analysis=kernel-resource-usage]
+GQA_fwd.cpp:56:1: remark:     LDS Size [bytes/block]: 0 [-Rpass-analysis=kernel-resource-usage]
+
+Running AITER...
+AITER (AMD) reference average execution time: 75.5165 ms
+AITER (AMD) reference performance: 1164.79 TFLOPS for b=16 h_q=16 h_kv=16 n=16384 d=128 causal=False.
+
+Running ThunderKittens...
+ThunderKittens average execution time: 78.5783 ms
+ThunderKittens performance: 1119.40 TFLOPS for b=16 h_q=16 h_kv=16 n=16384 d=128 causal=False.
+
+
+TK vs AITER comparison:
+
+O outputs:
+TK:  tensor([-0.009, -0.020, -0.009,  0.009, -0.001,  0.011,  0.012, -0.006], device='cuda:6', dtype=torch.bfloat16) Max: 0.0537109375
+AITER:  tensor([-0.009, -0.020, -0.009,  0.009, -0.001,  0.011,  0.012, -0.006], device='cuda:6', dtype=torch.bfloat16, grad_fn=<SelectBackward0>) Max: 0.05419921875
+
+
+Gradient K outputs:
+TK:  tensor([ 0.007,  0.009, -0.015, -0.002, -0.000, -0.002, -0.008, -0.012], device='cuda:6', dtype=torch.bfloat16) Max: 0.045654296875
+AITER:  tensor([ 0.007,  0.009, -0.015, -0.002, -0.000, -0.002, -0.008, -0.012], device='cuda:6', dtype=torch.bfloat16) Max: 0.045654296875
+
+Gradient V outputs:
+TK:  tensor([ 0.009,  0.015, -0.004,  0.009,  0.020,  0.003,  0.008, -0.011], device='cuda:6', dtype=torch.bfloat16) Max: 0.060302734375
+AITER:  tensor([ 0.009,  0.015, -0.004,  0.009,  0.020,  0.003,  0.008, -0.011], device='cuda:6', dtype=torch.bfloat16) Max: 0.060302734375
+
+Gradient Q outputs:
+TK:  tensor([ 0.011, -0.005,  0.014, -0.001,  0.010, -0.001, -0.008,  0.003], device='cuda:6', dtype=torch.bfloat16) Max: 0.0439453125
+AITER:  tensor([ 0.011, -0.005,  0.013, -0.001,  0.010, -0.001, -0.008,  0.003], device='cuda:6', dtype=torch.bfloat16) Max: 0.04345703125
+
+Robustness checks (TK vs AITER):
+O: max_abs=0.000488, max_rel=0.0000, rel_l2=0.0085, cos=0.999993, errors=0/536870912 (0.0000%)
+
+Gradient comparisons (TK vs AITER):
+Q grad: max_abs=0.001465, max_rel=0.0000, rel_l2=0.0134, cos=0.999914, errors=0/536870912 (0.0000%)
+K grad: max_abs=0.000244, max_rel=0.0000, rel_l2=0.0040, cos=0.999995, errors=0/536870912 (0.0000%)
+V grad: max_abs=0.000244, max_rel=0.0000, rel_l2=0.0040, cos=0.999996, errors=0/536870912 (0.0000%)

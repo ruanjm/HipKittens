@@ -58,8 +58,8 @@ def get_output(x, cos_in, sin_in, ro_dim):
 start_event = torch.cuda.Event(enable_timing=True) # in milliseconds
 end_event = torch.cuda.Event(enable_timing=True)
 flops_ref = flops(B, N, D)
-num_warmup = 50
-num_iters = 50
+num_warmup = 500
+num_iters = 100
 
 cos_in, sin_in, ro_dim = get_cos_sin(x)
 
@@ -106,20 +106,15 @@ print(f"Speedup from torch.compile: {speedup:.2f}x")
 # AITER
 print("\nAITer (RoPE cached):")
 from aiter.ops.rope import rope_cached_fwd as _aiter_cached_fwd
-
 # Prepare inputs in AITer layout (SBHD) and cached cos/sin as [S,1,1,D//2]
 x_sbhd = rearrange(x, 'b h n d -> n b h d').contiguous()
 cos_aiter = cos_in.view(N, 1, 1, D // 2).to(dtype=x.dtype, device=x.device).contiguous()
 sin_aiter = sin_in.view(N, 1, 1, D // 2).to(dtype=x.dtype, device=x.device).contiguous()
-
-# AITer flags: 0 = NEOX-style rotation; reuse front part True for d//2 cos/sin; nope_first can be True (irrelevant if rotate over full D)
 rotate_style = 0
 reuse_freqs_front_part = True
 nope_first = True
-
 def _aiter_call(x_sbhd, cos, sin):
-    return _aiter_cached_fwd(x_sbhd, cos, sin,
-                                 rotate_style, reuse_freqs_front_part, nope_first)
+    return _aiter_cached_fwd(x_sbhd, cos, sin, rotate_style, reuse_freqs_front_part, nope_first)
 for _ in range(num_warmup):
     o_sbhd = _aiter_call(x_sbhd, cos_aiter, sin_aiter)
 timings_aiter = []
@@ -130,7 +125,6 @@ for _ in range(num_iters):
     end_event.record()
     torch.cuda.synchronize()
     timings_aiter.append(start_event.elapsed_time(end_event))
-
 avg_time_aiter = sum(timings_aiter) / len(timings_aiter)
 eff_aiter = efficiency(flops_ref, avg_time_aiter)
 print(f"AITer average execution time: {avg_time_aiter:.4f} ms")
@@ -146,9 +140,10 @@ print("AITer max_diff:", o_diff_aiter.max().item())
 
 # TK
 # print("\nTK:")
-o_tk = torch.zeros_like(x).bfloat16()
-sin_tk = sin_in.to(torch.bfloat16).cuda()
-cos_tk = cos_in.to(torch.bfloat16).cuda()
+stream_handle = torch.cuda.current_stream().cuda_stream
+o_tk = torch.zeros_like(x).bfloat16().contiguous()
+sin_tk = sin_in.to(torch.bfloat16).cuda().contiguous()
+cos_tk = cos_in.to(torch.bfloat16).cuda().contiguous()
 timings = []
 for _ in range(num_warmup):
     tk_kernel.dispatch_rotary(x, o_tk, sin_tk, cos_tk)

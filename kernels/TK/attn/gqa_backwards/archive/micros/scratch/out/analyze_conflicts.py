@@ -23,7 +23,7 @@ pivot = pivot.fillna(0)
 
 # Show only interesting kernels
 # interesting = pivot[pivot["SQ_INSTS_LDS"] > 0]
-interesting = pivot[pivot['Kernel_Name'].str.contains('micro_tk')]
+interesting = pivot[pivot['Kernel_Name'].str.contains('micro_globals')]
 interesting = interesting.sort_values(by="Conflict_Ratio", ascending=False)
 
 # Print summary
