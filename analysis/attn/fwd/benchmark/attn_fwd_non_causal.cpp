@@ -511,7 +511,6 @@ void dispatch_micro(attn_globals<D> g) {
     unsigned long mem_size = g.dynamic_shared_memory();
     hipFuncSetAttribute((void*)attend_ker<D>, hipFuncAttributeMaxDynamicSharedMemorySize, mem_size);
     attend_ker<D><<<g.grid(), g.block(), mem_size, g.stream>>>(g);
-    hipDeviceSynchronize();
 }
 
 PYBIND11_MODULE(tk_kernel, m) {

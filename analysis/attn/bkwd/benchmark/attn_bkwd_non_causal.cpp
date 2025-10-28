@@ -38,6 +38,7 @@ template<int D> struct attn_bwd_combined_globals {
   gl<bf16, -1, -1, -1, -1> Q, K, V;
   gl<bf16, -1, -1, -1, -1> dOg, dQg, dKg, dVg;
   gl<float, -1, -1, -1, -1> L_vec, delta_vec;
+  hipStream_t stream;
   dim3 grid() { return dim3(ATTN_H_KV, (ATTN_N / BLOCK_SIZE_KV), ATTN_B); }
   dim3 block() { return dim3(NUM_THREADS); }
   size_t dynamic_shared_memory() { return MAX_SHARED_MEMORY; }
@@ -3175,7 +3176,7 @@ template<int D>
 void dispatch_bwd_combined(attn_bwd_combined_globals<D> g) {
     unsigned long mem_size = g.dynamic_shared_memory();
     hipFuncSetAttribute((void*)attend_bwd_combined_ker<D>, hipFuncAttributeMaxDynamicSharedMemorySize, mem_size);
-    attend_bwd_combined_ker<D><<<g.grid(), g.block(), mem_size>>>(g);
+    attend_bwd_combined_ker<D><<<g.grid(), g.block(), mem_size, g.stream>>>(g);
     hipDeviceSynchronize();
 }
 

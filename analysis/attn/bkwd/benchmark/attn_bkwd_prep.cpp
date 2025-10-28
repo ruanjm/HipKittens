@@ -155,6 +155,7 @@ template<int D> struct attn_prep_globals {
     gl<bf16, -1, -1, -1, -1> Og;
     gl<bf16, -1, -1, -1, -1> dOg; 
     gl<float, -1, -1, -1, -1> delta;
+    hipStream_t stream;
     dim3 grid() { return dim3(ATTN_B, ATTN_H, ATTN_N / (DOT_SLICE_QO * NUM_WARPS)); }
     dim3 block() { return dim3(NUM_THREADS); }
     size_t dynamic_shared_memory() { return MAX_SHARED_MEMORY; }
@@ -188,12 +189,13 @@ template<int D>
 void dispatch_prep(attn_prep_globals<D> g) {
     unsigned long mem_size = g.dynamic_shared_memory();
     hipFuncSetAttribute((void*)attend_prep_ker<D>, hipFuncAttributeMaxDynamicSharedMemorySize, mem_size);
-    attend_prep_ker<D><<<g.grid(), g.block(), mem_size>>>(g);
+    attend_prep_ker<D><<<g.grid(), g.block(), mem_size, g.stream>>>(g);
     hipDeviceSynchronize();
 }
 
 template<int D> struct attn_dq_shuffle_globals { 
     gl<bf16, -1, -1, -1, -1> dQg_in, dQg_out;
+    hipStream_t stream;
     dim3 grid() { return dim3(ATTN_B, ATTN_H, ATTN_N / (DOT_SLICE_QO * NUM_WARPS)); }
     dim3 block() { return dim3(NUM_THREADS); }
     size_t dynamic_shared_memory() { return MAX_SHARED_MEMORY; }
@@ -218,8 +220,7 @@ template<int D>
 void dispatch_dq_shuffle(attn_dq_shuffle_globals<D> g) {
     unsigned long mem_size = g.dynamic_shared_memory();
     hipFuncSetAttribute((void*)attend_dq_shuffle_ker<D>, hipFuncAttributeMaxDynamicSharedMemorySize, mem_size);
-    attend_dq_shuffle_ker<D><<<g.grid(), g.block(), mem_size>>>(g);
-    hipDeviceSynchronize();
+    attend_dq_shuffle_ker<D><<<g.grid(), g.block(), mem_size, g.stream>>>(g);
 }
 
 PYBIND11_MODULE(tk_kernel_bkwd_prep, m) {

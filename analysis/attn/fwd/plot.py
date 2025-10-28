@@ -229,7 +229,7 @@ for device in ['mi300x', 'mi325x', 'mi350x', 'mi355x']:
 
         # Read data
         try:
-            with open(f'mi350x/{device}_{setting}.json', 'r') as f:
+            with open(f'benchmark/{device}_{setting}.json', 'r') as f:
                 data = json.load(f)
         except Exception as e:
             print(f"Error loading {device}_{setting}.json: {e}")
