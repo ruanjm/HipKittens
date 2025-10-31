@@ -2,6 +2,12 @@
 
 #ifdef TEST_WARP_MEMORY_VEC_GLOBAL_TO_REGISTER
 
+#ifdef KITTENS_CDNA4
+#define LENGTH 32
+#else
+#define LENGTH 16
+#endif
+
 template<typename T>
 struct reg_vec_load_store {
     using dtype = T;
@@ -14,7 +20,7 @@ struct reg_vec_load_store {
         o_ref = i_ref; // overwrite the whole thing
     }
     template<int S, int NW, kittens::ducks::gl::all GL, kittens::ducks::rv_layout::all L> __device__ static void device_func(const GL &input, const GL &output) {
-        kittens::rv_bf<16*S, L> reg_vec;
+        kittens::rv_bf<LENGTH*S, L> reg_vec;
         kittens::load(reg_vec, input, {});
         kittens::store(output, reg_vec, {});
     }
@@ -22,7 +28,8 @@ struct reg_vec_load_store {
 
 void warp::memory::vec::global_to_register::tests(test_data &results) {
     std::cout << "\n ----- Starting ops/warp/memory/vec/global_to_register tests! -----\n" << std::endl;
-    constexpr int SIZE = INTENSITY_1 ? 2  :
+    constexpr int SIZE = INTENSITY_0 ? 1  :
+                         INTENSITY_1 ? 2  :
                          INTENSITY_2 ? 4  : 
                          INTENSITY_3 ? 8  :
                          INTENSITY_4 ? 16 : -1;
@@ -30,6 +37,10 @@ void warp::memory::vec::global_to_register::tests(test_data &results) {
     sweep_gmem_type_1d_warp<reg_vec_load_store, SIZE, kittens::ducks::rv_layout::naive>::run(results);
     sweep_gmem_type_1d_warp<reg_vec_load_store, SIZE, kittens::ducks::rv_layout::ortho>::run(results);
     sweep_gmem_type_1d_warp<reg_vec_load_store, SIZE, kittens::ducks::rv_layout::align>::run(results);
+
+    #ifdef KITTENS_CDNA4
+    sweep_gmem_type_1d_warp<reg_vec_load_store, SIZE, kittens::ducks::rv_layout::accum_align>::run(results);
+    #endif
 }
 
 

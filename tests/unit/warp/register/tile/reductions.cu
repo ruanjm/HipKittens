@@ -3,89 +3,110 @@
 #ifdef TEST_WARP_REGISTER_TILE_REDUCTIONS
 
 struct normalize_row {
-    template<int H, int W, int NW, kittens::ducks::rt_layout::all L> using valid = std::bool_constant<NW == 1 && W*H<=64>; // this is warp-level
+    using dtype = float;
+    template<typename RT_SHAPE, typename ST_SHAPE, int H, int W, int NW, kittens::ducks::rt_layout::all L> using valid = std::bool_constant<NW == 1 && W*H<=64>; // this is warp-level
     static inline const std::string test_identifier = "reg_norm_row";
-    template<int H, int W, int NW, gl_t GLT, kittens::ducks::rt_layout::all L> __host__ static void host_func(const std::vector<float> &i_ref, std::vector<float> &o_ref) {
-        for(int i = 0; i < H*16; i++) {
+    template<typename RT_SHAPE, typename ST_SHAPE, int H, int W, int NW, gl_t GLT, kittens::ducks::rt_layout::all L> __host__ static void host_func(const std::vector<float> &i_ref, std::vector<float> &o_ref) {
+        for(int i = 0; i < RT_SHAPE::rows*H; i++) {
             float row_sum = 0;
-            for(int j = 0; j < W*16; j++) {
-                o_ref[i*W*16+j]  = i_ref[i*W*16+j];
-                row_sum         += i_ref[i*W*16+j];
+            for(int j = 0; j < RT_SHAPE::cols*W; j++) {
+                o_ref[i*RT_SHAPE::cols*W+j]  = i_ref[i*RT_SHAPE::cols*W+j];
+                row_sum         += i_ref[i*RT_SHAPE::cols*W+j];
             }
-            for(int j = 0; j < W*16; j++) o_ref[i*W*16+j] /= row_sum;
+            for(int j = 0; j < RT_SHAPE::cols*W; j++) o_ref[i*RT_SHAPE::cols*W+j] /= row_sum;
         }
     }
-    template<int H, int W, int NW, gl_t GLT, kittens::ducks::rt_layout::all L> __device__ static void device_func(const GLT &input, const GLT &output) {
-        kittens::rt_fl<16*H, 16*W, L> reg_tile;
+    template<typename RT_SHAPE, typename ST_SHAPE, typename dtype, int H, int W, int NW, gl_t GLT, kittens::ducks::rt_layout::all L> __device__ static void device_func(const GLT &input, const GLT &output) {
+        kittens::rt<dtype, RT_SHAPE::rows*H, RT_SHAPE::cols*W, L, RT_SHAPE> reg_tile;
         kittens::load(reg_tile, input, {});
-        typename kittens::rt_fl<16*H, 16*W, L>::col_vec accum;
+        __builtin_amdgcn_s_waitcnt(0);
+        __builtin_amdgcn_s_barrier();
+        typename kittens::rt<dtype, RT_SHAPE::rows*H, RT_SHAPE::cols*W, L, RT_SHAPE>::col_vec accum;
         kittens::row_sum(accum, reg_tile);
+        __builtin_amdgcn_s_waitcnt(0);
+        __builtin_amdgcn_s_barrier();
         kittens::div_row(reg_tile, reg_tile, accum);
         kittens::store(output, reg_tile, {});
     }
 };
 struct normalize_col {
-    template<int H, int W, int NW, kittens::ducks::rt_layout::all L> using valid = std::bool_constant<NW == 1 && W*H<=64>; // this is warp-level
+    using dtype = float;
+    template<typename RT_SHAPE, typename ST_SHAPE, int H, int W, int NW, kittens::ducks::rt_layout::all L> using valid = std::bool_constant<NW == 1 && W*H<=64>; // this is warp-level
     static inline const std::string test_identifier = "reg_norm_col";
-    template<int H, int W, int NW, gl_t GLT, kittens::ducks::rt_layout::all L> __host__ static void host_func(const std::vector<float> &i_ref, std::vector<float> &o_ref) {
-        for(int i = 0; i < W*16; i++) {
+    template<typename RT_SHAPE, typename ST_SHAPE, int H, int W, int NW, gl_t GLT, kittens::ducks::rt_layout::all L> __host__ static void host_func(const std::vector<float> &i_ref, std::vector<float> &o_ref) {
+        for(int i = 0; i < RT_SHAPE::cols*W; i++) {
             float col_sum = 0;
-            for(int j = 0; j < H*16; j++) {
-                o_ref[i+j*W*16]  = i_ref[i+j*W*16];
-                col_sum         += i_ref[i+j*W*16];
+            for(int j = 0; j < RT_SHAPE::rows*H; j++) {
+                o_ref[i+j*RT_SHAPE::cols*W]  = i_ref[i+j*RT_SHAPE::cols*W];
+                col_sum         += i_ref[i+j*RT_SHAPE::cols*W];
             }
-            for(int j = 0; j < H*16; j++) o_ref[i+j*W*16] /= col_sum;
+            for(int j = 0; j < RT_SHAPE::rows*H; j++) o_ref[i+j*RT_SHAPE::cols*W] = col_sum;
         }
     }
-    template<int H, int W, int NW, gl_t GLT, kittens::ducks::rt_layout::all L> __device__ static void device_func(const GLT &input, const GLT &output) {
-        kittens::rt_fl<16*H, 16*W, L> reg_tile;
+    template<typename RT_SHAPE, typename ST_SHAPE, typename dtype, int H, int W, int NW, gl_t GLT, kittens::ducks::rt_layout::all L> __device__ static void device_func(const GLT &input, const GLT &output) {
+        kittens::rt<dtype, RT_SHAPE::rows*H, RT_SHAPE::cols*W, L, RT_SHAPE> reg_tile;
         kittens::load(reg_tile, input, {});
-        typename kittens::rt_fl<16*H, 16*W, L>::row_vec accum;
+        __builtin_amdgcn_s_waitcnt(0);
+        __builtin_amdgcn_s_barrier();
+        typename kittens::rt<dtype, RT_SHAPE::rows*H, RT_SHAPE::cols*W, L, RT_SHAPE>::row_vec accum;
         kittens::col_sum(accum, reg_tile);
-        kittens::div_col(reg_tile, reg_tile, accum);
+        __builtin_amdgcn_s_waitcnt(0);
+        __builtin_amdgcn_s_barrier();
+        zero(reg_tile);
+        kittens::add_col(reg_tile, reg_tile, accum);
         kittens::store(output, reg_tile, {});
     }
 };
 struct broadcast_row {
-    template<int H, int W, int NW, kittens::ducks::rt_layout::all L> using valid = std::bool_constant<NW == 1 && W*H<=64>; // this is warp-level
+    using dtype = float;
+    template<typename RT_SHAPE, typename ST_SHAPE, int H, int W, int NW, kittens::ducks::rt_layout::all L> using valid = std::bool_constant<NW == 1 && W*H<=64>; // this is warp-level
     static inline const std::string test_identifier = "reg_broadcast_row";
-    template<int H, int W, int NW, gl_t GLT, kittens::ducks::rt_layout::all L> __host__ static void host_func(const std::vector<float> &i_ref, std::vector<float> &o_ref) {
-        for(int i = 0; i < H*16; i++) {
+    template<typename RT_SHAPE, typename ST_SHAPE, int H, int W, int NW, gl_t GLT, kittens::ducks::rt_layout::all L> __host__ static void host_func(const std::vector<float> &i_ref, std::vector<float> &o_ref) {
+        for(int i = 0; i < RT_SHAPE::rows*H; i++) {
             float row_sum = 0;
-            for(int j = 0; j < W*16; j++) {
-                o_ref[i*W*16+j]  = i_ref[i*W*16+j];
-                row_sum         += i_ref[i*W*16+j];
+            for(int j = 0; j < RT_SHAPE::cols*W; j++) {
+                o_ref[i*RT_SHAPE::cols*W+j]  = i_ref[i*RT_SHAPE::cols*W+j];
+                row_sum         += i_ref[i*RT_SHAPE::cols*W+j];
             }
-            for(int j = 0; j < W*16; j++) o_ref[i*W*16+j] = row_sum;
+            for(int j = 0; j < RT_SHAPE::cols*W; j++) o_ref[i*RT_SHAPE::cols*W+j] = row_sum;
         }
     }
-    template<int H, int W, int NW, gl_t GLT, kittens::ducks::rt_layout::all L> __device__ static void device_func(const GLT &input, const GLT &output) {
-        kittens::rt_fl<16*H, 16*W, L> reg_tile;
+    template<typename RT_SHAPE, typename ST_SHAPE, typename dtype, int H, int W, int NW, gl_t GLT, kittens::ducks::rt_layout::all L> __device__ static void device_func(const GLT &input, const GLT &output) {
+        kittens::rt<dtype, RT_SHAPE::rows*H, RT_SHAPE::cols*W, L, RT_SHAPE> reg_tile;
         kittens::load(reg_tile, input, {});
-        typename kittens::rt_fl<16*H, 16*W, L>::col_vec accum;
+        __builtin_amdgcn_s_waitcnt(0);
+        __builtin_amdgcn_s_barrier();
+        typename kittens::rt<dtype, RT_SHAPE::rows*H, RT_SHAPE::cols*W, L, RT_SHAPE>::col_vec accum;
         kittens::row_sum(accum, reg_tile);
+        __builtin_amdgcn_s_waitcnt(0);
+        __builtin_amdgcn_s_barrier();
         kittens::broadcast_row(reg_tile, accum);
         kittens::store(output, reg_tile, {});
     }
 };
 struct broadcast_col {
-    template<int H, int W, int NW, kittens::ducks::rt_layout::all L> using valid = std::bool_constant<NW == 1 && W*H<=64>; // this is warp-level
+    using dtype = float;
+    template<typename RT_SHAPE, typename ST_SHAPE, int H, int W, int NW, kittens::ducks::rt_layout::all L> using valid = std::bool_constant<NW == 1 && W*H<=64>; // this is warp-level
     static inline const std::string test_identifier = "reg_broadcast_col";
-    template<int H, int W, int NW, gl_t GLT, kittens::ducks::rt_layout::all L> __host__ static void host_func(const std::vector<float> &i_ref, std::vector<float> &o_ref) {
-        for(int i = 0; i < W*16; i++) {
+    template<typename RT_SHAPE, typename ST_SHAPE, int H, int W, int NW, gl_t GLT, kittens::ducks::rt_layout::all L> __host__ static void host_func(const std::vector<float> &i_ref, std::vector<float> &o_ref) {
+        for(int i = 0; i < RT_SHAPE::cols*W; i++) {
             float col_sum = 0;
-            for(int j = 0; j < H*16; j++) {
-                o_ref[i+j*W*16]  = i_ref[i+j*W*16];
-                col_sum         += i_ref[i+j*W*16];
+            for(int j = 0; j < RT_SHAPE::rows*H; j++) {
+                o_ref[i+j*RT_SHAPE::cols*W]  = i_ref[i+j*RT_SHAPE::cols*W];
+                col_sum         += i_ref[i+j*RT_SHAPE::cols*W];
             }
-            for(int j = 0; j < H*16; j++) o_ref[i+j*W*16] = col_sum;
+            for(int j = 0; j < RT_SHAPE::rows*H; j++) o_ref[i+j*RT_SHAPE::cols*W] = col_sum;
         }
     }
-    template<int H, int W, int NW, gl_t GLT, kittens::ducks::rt_layout::all L> __device__ static void device_func(const GLT &input, const GLT &output) {
-        kittens::rt_fl<16*H, 16*W, L> reg_tile;
+    template<typename RT_SHAPE, typename ST_SHAPE, typename dtype, int H, int W, int NW, gl_t GLT, kittens::ducks::rt_layout::all L> __device__ static void device_func(const GLT &input, const GLT &output) {
+        kittens::rt<dtype, RT_SHAPE::rows*H, RT_SHAPE::cols*W, L, RT_SHAPE> reg_tile;
         kittens::load(reg_tile, input, {});
-        typename kittens::rt_fl<16*H, 16*W, L>::row_vec accum;
+        __builtin_amdgcn_s_waitcnt(0);
+        __builtin_amdgcn_s_barrier();
+        typename kittens::rt<dtype, RT_SHAPE::rows*H, RT_SHAPE::cols*W, L, RT_SHAPE>::row_vec accum;
         kittens::col_sum(accum, reg_tile);
+        __builtin_amdgcn_s_waitcnt(0);
+        __builtin_amdgcn_s_barrier();
         kittens::broadcast_col(reg_tile, accum);
         kittens::store(output, reg_tile, {});
     }
@@ -98,14 +119,78 @@ void warp::reg::tile::reductions::tests(test_data &results) {
                          INTENSITY_2 ? 4  : 
                          INTENSITY_3 ? 8  :
                          INTENSITY_4 ? 16 : 32;
-    sweep_size_2d_warp<normalize_row, SIZE, SIZE, kittens::ducks::rt_layout::row>::run(results);
-    sweep_size_2d_warp<normalize_row, SIZE, SIZE, kittens::ducks::rt_layout::col>::run(results);
-    sweep_size_2d_warp<normalize_col, SIZE, SIZE, kittens::ducks::rt_layout::row>::run(results);
-    sweep_size_2d_warp<normalize_col, SIZE, SIZE, kittens::ducks::rt_layout::col>::run(results);
-    sweep_size_2d_warp<broadcast_row, SIZE, SIZE, kittens::ducks::rt_layout::row>::run(results);
-    sweep_size_2d_warp<broadcast_row, SIZE, SIZE, kittens::ducks::rt_layout::col>::run(results);
-    sweep_size_2d_warp<broadcast_col, SIZE, SIZE, kittens::ducks::rt_layout::row>::run(results);
-    sweep_size_2d_warp<broadcast_col, SIZE, SIZE, kittens::ducks::rt_layout::col>::run(results);
+
+    using DEFAULT_ST_SHAPE = kittens::ducks::st_shape::st_16x16;
+
+    using RT_SHAPE_1 = kittens::ducks::rt_shape::rt_16x32;
+    sweep_size_2d_warp<normalize_row, RT_SHAPE_1, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::row>::run(results);
+    sweep_size_2d_warp<normalize_row, RT_SHAPE_1, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::col>::run(results);
+    sweep_size_2d_warp<normalize_col, RT_SHAPE_1, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::row>::run(results);
+    sweep_size_2d_warp<normalize_col, RT_SHAPE_1, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::col>::run(results);
+    sweep_size_2d_warp<broadcast_row, RT_SHAPE_1, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::row>::run(results);
+    sweep_size_2d_warp<broadcast_row, RT_SHAPE_1, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::col>::run(results);
+    sweep_size_2d_warp<broadcast_col, RT_SHAPE_1, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::row>::run(results);
+    sweep_size_2d_warp<broadcast_col, RT_SHAPE_1, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::col>::run(results);
+
+    using RT_SHAPE_2 = kittens::ducks::rt_shape::rt_32x16;
+    sweep_size_2d_warp<normalize_row, RT_SHAPE_2, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::row>::run(results);
+    sweep_size_2d_warp<normalize_row, RT_SHAPE_2, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::col>::run(results);
+    sweep_size_2d_warp<normalize_col, RT_SHAPE_2, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::row>::run(results);
+    sweep_size_2d_warp<normalize_col, RT_SHAPE_2, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::col>::run(results);
+    sweep_size_2d_warp<broadcast_row, RT_SHAPE_2, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::row>::run(results);
+    sweep_size_2d_warp<broadcast_row, RT_SHAPE_2, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::col>::run(results);
+    sweep_size_2d_warp<broadcast_col, RT_SHAPE_2, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::row>::run(results);
+    sweep_size_2d_warp<broadcast_col, RT_SHAPE_2, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::col>::run(results);
+
+    using RT_SHAPE_3 = kittens::ducks::rt_shape::rt_16x16;
+    sweep_size_2d_warp<normalize_row, RT_SHAPE_3, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::row>::run(results);
+    sweep_size_2d_warp<normalize_row, RT_SHAPE_3, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::col>::run(results);
+    sweep_size_2d_warp<normalize_col, RT_SHAPE_3, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::row>::run(results);
+    sweep_size_2d_warp<normalize_col, RT_SHAPE_3, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::col>::run(results);
+    sweep_size_2d_warp<broadcast_row, RT_SHAPE_3, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::row>::run(results);
+    sweep_size_2d_warp<broadcast_row, RT_SHAPE_3, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::col>::run(results);
+    sweep_size_2d_warp<broadcast_col, RT_SHAPE_3, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::row>::run(results);
+    sweep_size_2d_warp<broadcast_col, RT_SHAPE_3, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::col>::run(results);
+
+    using RT_SHAPE_4 = kittens::ducks::rt_shape::rt_32x32;
+    sweep_size_2d_warp<normalize_row, RT_SHAPE_4, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::row>::run(results);
+    sweep_size_2d_warp<normalize_row, RT_SHAPE_4, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::col>::run(results);
+    sweep_size_2d_warp<normalize_col, RT_SHAPE_4, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::row>::run(results);
+    sweep_size_2d_warp<normalize_col, RT_SHAPE_4, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::col>::run(results);
+    sweep_size_2d_warp<broadcast_row, RT_SHAPE_4, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::row>::run(results);
+    sweep_size_2d_warp<broadcast_row, RT_SHAPE_4, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::col>::run(results);
+    sweep_size_2d_warp<broadcast_col, RT_SHAPE_4, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::row>::run(results);
+    sweep_size_2d_warp<broadcast_col, RT_SHAPE_4, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::col>::run(results);
+
+    using RT_SHAPE_5 = kittens::ducks::rt_shape::rt_32x32_8;
+    sweep_size_2d_warp<normalize_row, RT_SHAPE_5, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::row>::run(results);
+    sweep_size_2d_warp<normalize_row, RT_SHAPE_5, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::col>::run(results);
+    sweep_size_2d_warp<normalize_col, RT_SHAPE_5, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::row>::run(results);
+    sweep_size_2d_warp<normalize_col, RT_SHAPE_5, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::col>::run(results);
+    sweep_size_2d_warp<broadcast_row, RT_SHAPE_5, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::row>::run(results);
+    sweep_size_2d_warp<broadcast_row, RT_SHAPE_5, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::col>::run(results);
+    sweep_size_2d_warp<broadcast_col, RT_SHAPE_5, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::row>::run(results);
+    sweep_size_2d_warp<broadcast_col, RT_SHAPE_5, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::col>::run(results);
+    
+    using RT_SHAPE_6 = kittens::ducks::rt_shape::rt_16x32_4;
+    sweep_size_2d_warp<normalize_row, RT_SHAPE_6, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::row>::run(results);
+    sweep_size_2d_warp<normalize_row, RT_SHAPE_6, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::col>::run(results);
+    sweep_size_2d_warp<normalize_col, RT_SHAPE_6, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::row>::run(results);
+    sweep_size_2d_warp<normalize_col, RT_SHAPE_6, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::col>::run(results);
+    sweep_size_2d_warp<broadcast_row, RT_SHAPE_6, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::row>::run(results);
+    sweep_size_2d_warp<broadcast_row, RT_SHAPE_6, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::col>::run(results);
+    sweep_size_2d_warp<broadcast_col, RT_SHAPE_6, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::row>::run(results);
+    sweep_size_2d_warp<broadcast_col, RT_SHAPE_6, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::col>::run(results);
+    
+    using RT_SHAPE_7 = kittens::ducks::rt_shape::rt_32x16_4;
+    sweep_size_2d_warp<normalize_row, RT_SHAPE_7, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::row>::run(results);
+    sweep_size_2d_warp<normalize_row, RT_SHAPE_7, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::col>::run(results);
+    sweep_size_2d_warp<normalize_col, RT_SHAPE_7, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::row>::run(results);
+    sweep_size_2d_warp<normalize_col, RT_SHAPE_7, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::col>::run(results);
+    sweep_size_2d_warp<broadcast_row, RT_SHAPE_7, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::row>::run(results);
+    sweep_size_2d_warp<broadcast_row, RT_SHAPE_7, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::col>::run(results);
+    sweep_size_2d_warp<broadcast_col, RT_SHAPE_7, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::row>::run(results);
+    sweep_size_2d_warp<broadcast_col, RT_SHAPE_7, DEFAULT_ST_SHAPE, SIZE, SIZE, 1, kittens::ducks::rt_layout::col>::run(results);
 }
 
 #endif

@@ -2,6 +2,12 @@
 
 #ifdef TEST_WARP_MEMORY_VEC_SHARED_TO_REGISTER
 
+#ifdef KITTENS_CDNA4
+#define LENGTH 32
+#else
+#define LENGTH 16
+#endif
+
 template<typename T>
 struct vec_load_store {
     using dtype = T;
@@ -17,21 +23,26 @@ struct vec_load_store {
     template<int S, int NW, kittens::ducks::gl::all GL, kittens::ducks::rv_layout::all L> __device__ static void device_func(const GL &input, const GL &output) {
         extern __shared__ kittens::alignment_dummy __shm[]; // this is the CUDA shared memory
         kittens::shared_allocator al((int*)&__shm[0]); 
-        kittens::sv<dtype, 16*S> &shared_vec = al.allocate<kittens::sv<dtype, 16*S>>();
-        kittens::rv_fl<16*S, L> reg_vec;
+        kittens::sv<dtype, LENGTH*S> &shared_vec = al.allocate<kittens::sv<dtype, LENGTH*S>>();
+        kittens::rv_fl<LENGTH*S, L> reg_vec;
         kittens::load(shared_vec, input, {});
-        __syncthreads();
+        __builtin_amdgcn_s_waitcnt(0);
+        __builtin_amdgcn_s_barrier();
         kittens::load(reg_vec, shared_vec);
+        __builtin_amdgcn_s_waitcnt(0);
+        __builtin_amdgcn_s_barrier();
         kittens::add(reg_vec, reg_vec, float(1.)); // TODO: CHANGE HOST TOO
         kittens::store(shared_vec, reg_vec);
-        __syncthreads();
+        __builtin_amdgcn_s_waitcnt(0);
+        __builtin_amdgcn_s_barrier();
         kittens::store(output, shared_vec, {});
     }
 };
 
 void warp::memory::vec::shared_to_register::tests(test_data &results) {
     std::cout << "\n ----- Starting ops/warp/memory/vec/shared_to_register tests! -----\n" << std::endl;
-    constexpr int SIZE = INTENSITY_1 ? 2  :
+    constexpr int SIZE = INTENSITY_0 ? 1  :
+                         INTENSITY_1 ? 2  :
                          INTENSITY_2 ? 4  : 
                          INTENSITY_3 ? 8  :
                          INTENSITY_4 ? 16 : -1;
@@ -39,6 +50,10 @@ void warp::memory::vec::shared_to_register::tests(test_data &results) {
     sweep_gmem_type_1d_warp<vec_load_store, SIZE, kittens::ducks::rv_layout::naive>::run(results);
     sweep_gmem_type_1d_warp<vec_load_store, SIZE, kittens::ducks::rv_layout::ortho>::run(results);
     sweep_gmem_type_1d_warp<vec_load_store, SIZE, kittens::ducks::rv_layout::align>::run(results);
+
+    #ifdef KITTENS_CDNA4
+    sweep_gmem_type_1d_warp<vec_load_store, SIZE, kittens::ducks::rv_layout::accum_align>::run(results);
+    #endif
 }
 
 #endif

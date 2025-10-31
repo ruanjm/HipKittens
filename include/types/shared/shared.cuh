@@ -7,6 +7,4 @@
 
 #include "sv.cuh"
 #include "st.cuh"
-
-#include "csv.cuh"
-#include "cst.cuh"
+#include "st_shape.cuh"

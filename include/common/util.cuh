@@ -26,27 +26,6 @@
 namespace kittens {
 
 /* ----------  GENERAL CONSTANTS FOR KITTENS  ---------- */
-
-/**
- * @brief Tile dimension constant.
- */
-#ifdef KITTENS_CDNA4
-#ifdef FP8_USE_16x128
-template<typename T> constexpr int TILE_COL_DIM = sizeof(T) == 1 ? 128 : 16;
-template<typename T> constexpr int TILE_ROW_DIM = 16;
-#else
-template<typename T> constexpr int TILE_COL_DIM = sizeof(T) == 1 ? 64 : 32;
-template<typename T> constexpr int TILE_ROW_DIM = 32;
-#endif
-#else
-template<typename T> constexpr int TILE_COL_DIM = sizeof(T) == 1 ? 32 : 16;
-template<typename T> constexpr int TILE_ROW_DIM = 16;
-#endif
-
-/**
- * @brief Tile num elements constant calculated as TILE_DIM squared.
- */
-template<typename T> constexpr int TILE_ELEMENTS{TILE_COL_DIM<T>*TILE_ROW_DIM<T>};
 /**
  * @brief Constant representing number of threads in a warp.
  */
@@ -78,13 +57,58 @@ __device__ __forceinline__ int warpgroupid() { return threadIdx.x >> 8; }
  */
 __device__ __forceinline__ int laneid() { return threadIdx.x & 0x3f; }
 
-#if defined(KITTENS_CDNA2)
-constexpr int MAX_SHARED_MEMORY = 65536; 
-#elif defined(KITTENS_CDNA3)
-constexpr int MAX_SHARED_MEMORY = 65536;
-#else
+
+/**
+ * @brief Compute the ceiling division of two integers.
+ * @param a The dividend.
+ * @param b The divisor.
+ * @return The ceiling division result.
+ */
+__host__ __device__ inline int ceil_div(int a, int b) {
+    return (a + b - 1) / b;
+  }
+
+/**
+   * @brief Transform a workgroup ID to a new workgroup ID based on the chunk size and number of XCDs.
+   * @param workgroup_id The original workgroup ID.
+   * @param num_workgroups The total number of workgroups.
+   * @param num_xcds The number of XCDs.
+   * @param chunk_size The chunk size.
+   * @return The new workgroup ID.
+   */
+   __host__ __device__ inline int chiplet_transform_chunked(
+    int workgroup_id, 
+    int num_workgroups,
+    int num_xcds,
+    int chunk_size 
+) {
+    // Current XCD
+    int xcd = workgroup_id % num_xcds;
+
+    // Largest full (NUM_XCDS*CHUNK_SIZE)-aligned block
+    int block = num_xcds * chunk_size;
+    int limit = (num_workgroups / block) * block;
+
+    // If pid beyond the last full block, leave unchanged
+    if (workgroup_id > limit) return workgroup_id;
+
+    // Local PID (within round-robin assignment)
+    int local_pid    = workgroup_id / num_xcds;
+    int chunk_idx    = local_pid / chunk_size;
+    int pos_in_chunk = local_pid % chunk_size;
+
+    // New PID
+    return chunk_idx * block + xcd * chunk_size + pos_in_chunk;
+}
+
+
 constexpr int MAX_SHARED_MEMORY = 160000;
-#endif
+constexpr int NUM_XCDS = 8;
+constexpr int CUS_PER_XCD = 32;
+constexpr int NUM_CUS = CUS_PER_XCD * NUM_XCDS;
+
+/* ----------  CUSTOM TYPES  ---------- */
+typedef uint32_t      uint2_t __attribute__((ext_vector_type(2)));
 
 /* ----------  TYPE HELPERS  ---------- */
 
@@ -126,21 +150,29 @@ static constexpr uint64_t MASK_ALL = 0xFFFFFFFFFFFFFFFF;
 template<typename T>
 __device__ static inline T packed_shfl_down(uint64_t mask, const T &f, int delta) {
 
-    #ifdef KITTENS_CDNA4
     if constexpr (std::is_same_v<T, bf16_2> || std::is_same_v<T, bf16>) {
         static_assert(sizeof(__hip_bfloat162) == sizeof(unsigned int));
         union {
           __hip_bfloat162 bf162;
           unsigned int ui;
-        } u{f};
+        } u;
+
+        if constexpr (std::is_same_v<T, bf16_2>) {
+            u.bf162 = *reinterpret_cast<const __hip_bfloat162*>(&f);
+        } else {
+            u.bf162 = __hip_bfloat162{*reinterpret_cast<const __hip_bfloat16*>(&f), 
+                                       *reinterpret_cast<const __hip_bfloat16*>(&f)};
+        }
+
         u.ui = __shfl_down_sync<unsigned long long, unsigned int>(mask, u.ui, delta, 64);
-        return u.bf162;
+        if constexpr (std::is_same_v<T, bf16>) {
+            return *reinterpret_cast<const T*>(&u.bf162.x);  // Extract single bf16 from the .x component
+        } else {
+            return u.bf162;  // Return full bf162 for bf16_2 case
+        }
     } else {
         return __shfl_down(f, delta);
     }
-    #else
-    return __shfl_down(f, delta);
-    #endif
 }
 template<>
 __device__ inline float2 packed_shfl_down<float2>(uint64_t mask, const float2 &f, int delta) {
@@ -219,13 +251,7 @@ using bytes_16 = HIP_vector_type<float, 4>;
 // }
 // }
 
-// Joyously stolen from https://github.com/NVIDIA/cutlass/blob/5c447dd84f8ae0e1d48ff9a2eae26ce8c4958101/include/cute/container/alignment.hpp#L51
-#if defined(__CUDACC__)
-#define KITTENS_ALIGN_AS(n) __align__(n)
-#else
 #define KITTENS_ALIGN_AS(n) alignas(n)
-#endif
-
 #define KITTENS_DEFAULT_ALIGN KITTENS_ALIGN_AS(16)
 
 /**

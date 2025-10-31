@@ -2,6 +2,12 @@
 
 #ifdef TEST_WARP_MEMORY_VEC_GLOBAL_TO_SHARED
 
+#ifdef KITTENS_CDNA4
+#define LENGTH 32
+#else
+#define LENGTH 16
+#endif
+
 template<typename T>
 struct shared_vec_load_store {
     using dtype = T;
@@ -15,8 +21,8 @@ struct shared_vec_load_store {
     }
     template<int S, int NW, kittens::ducks::gl::all GL> __device__ static void device_func(const GL &input, const GL &output) {
         extern __shared__ kittens::alignment_dummy __shm[]; // this is the CUDA shared memory
-        kittens::shared_allocator<16> al((int*)&__shm[0]); 
-        kittens::col_vec<kittens::st<dtype, 16*S, 16*S>> &shared_vec = al.allocate<kittens::col_vec<kittens::st<dtype, 16*S, 16*S>>>();
+        kittens::shared_allocator<LENGTH> al((int*)&__shm[0]); 
+        kittens::col_vec<kittens::st<dtype, kittens::TILE_ROW_DIM<dtype>*S, kittens::TILE_COL_DIM<dtype>*S>> &shared_vec = al.allocate<kittens::col_vec<kittens::st<dtype, kittens::TILE_ROW_DIM<dtype>*S, kittens::TILE_COL_DIM<dtype>*S>>>();
         kittens::load(shared_vec, input, {});
         kittens::store(output, shared_vec, {});
     }
@@ -24,7 +30,8 @@ struct shared_vec_load_store {
 
 void warp::memory::vec::global_to_shared::tests(test_data &results) {
     std::cout << "\n ----- Starting ops/warp/memory/vec/global_to_shared tests! -----\n" << std::endl;
-    constexpr int SIZE = INTENSITY_1 ? 2  :
+    constexpr int SIZE = INTENSITY_0 ? 1  :
+                         INTENSITY_1 ? 2  :
                          INTENSITY_2 ? 4  : 
                          INTENSITY_3 ? 8  :
                          INTENSITY_4 ? 16 : -1;

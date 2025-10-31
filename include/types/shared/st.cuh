@@ -7,6 +7,7 @@
 
 #include "../../common/common.cuh"
 #include "sv.cuh"
+#include "st_shape.cuh"
 
 /* ----------  MAIN TILE STRUCT  ---------- */
 
@@ -14,7 +15,7 @@
 namespace kittens {
 namespace ducks {
 /**
- * @namespace rt
+ * @namespace st
  * 
  * @brief The namespace where concepts and abstract types for shared tiles live.
  */
@@ -45,108 +46,49 @@ struct st_subtile;
  * @tparam _rows The height of the tile.
  * @tparam _cols The width of the tile.
  */
-template<typename _T, int _rows, int _cols>
+template<typename _T, int _rows, int _cols, ducks::st_shape::all _shape>
 struct KITTENS_DEFAULT_ALIGN st {
     using identifier = ducks::st::identifier; ///< Type identifier for shared memory tile.
     using T = base_types::packing<_T>::unpacked_type;
     using T2 = base_types::packing<_T>::packed_type;
     using dtype = T; ///< Data type of the elements in the tile.
+    using shape = _shape;
 
     // define underlying data as same as that projected, to make clear that this is *not* a subtile.
-    static constexpr int underlying_rows          = _rows;
-    static constexpr int underlying_cols          = _cols;
-    static constexpr int underlying_height        = _rows / kittens::TILE_ROW_DIM<T>;
-    static constexpr int underlying_width         = _cols / kittens::TILE_COL_DIM<T>;
-    static constexpr int underlying_num_elements  = underlying_rows * underlying_cols;
+    static constexpr int underlying_rows              = _rows;
+    static constexpr int underlying_cols              = _cols;
+    static constexpr int underlying_num_elements      = underlying_rows * underlying_cols;
+
+    static constexpr int underlying_subtile_rows      = shape::rows;
+    static constexpr int underlying_subtile_cols      = shape::cols;
+    static constexpr int underlying_subtile_row_bytes = shape::cols * sizeof(T);
+    static constexpr int underlying_subtile_elements  = underlying_subtile_rows * underlying_subtile_cols;
+    static constexpr int underlying_subtile_bytes     = underlying_subtile_elements * sizeof(T);
+    static constexpr int underlying_subtile_bytes_per_thread = shape::template bytes_per_thread<T>();
+
+    static constexpr int underlying_subtiles_per_row  = underlying_cols / underlying_subtile_cols;
+    static constexpr int underlying_subtiles_per_col  = underlying_rows / underlying_subtile_rows;
 
     static constexpr int rows                = _rows; ///< Total number of rows in the tile.
-    static_assert(rows % kittens::TILE_ROW_DIM<T> == 0, "Rows must be divisible by the tile dimension");
     static constexpr int cols                = _cols; ///< Total number of cols in the tile.
-    static_assert(cols % kittens::TILE_COL_DIM<T> == 0, "Cols must be divisible by the tile dimension");
-    static constexpr int height              = _rows / kittens::TILE_ROW_DIM<T>; ///< Height of the tile in terms of 16-element subtiles.
-    static constexpr int width               = _cols / kittens::TILE_COL_DIM<T>; ///< Width of the tile in terms of 16-element subtiles.
     static constexpr int num_elements        = rows * cols; ///< Total number of elements in the tile.
+
+    static constexpr int subtiles_per_row    = cols / underlying_subtile_cols;
+    static constexpr int subtiles_per_col    = rows / underlying_subtile_rows;
 
     static_assert(base_types::packing<dtype>::num() == 1); // must be a 1-packed type (e.g. float, bf16, etc)
 
-    static constexpr int swizzle_bytes = (
-        sizeof(dtype) == 1 ? (  // Add FP8 case
-            underlying_width%4 == 0 ? 256 :
-            underlying_width%2 == 0 ?  128 : 64
-        ) :
-        sizeof(dtype) == 2 ? (
-            #ifdef KITTENS_CDNA4
-            underlying_width%4 == 0 ? 256 :
-            underlying_width%2 == 0 ?  128 : 64
-            #else
-            underlying_width%4 == 0 ? 128 :
-            underlying_width%2 == 0 ?  64 : 32
-            #endif
-        ) :
-        sizeof(dtype) == 4 ? (
-            underlying_width%2 == 0 ? 128 : 64
-        ) : -1
-    );
-    static constexpr int swizzle_repeat = swizzle_bytes << 4;
-    static constexpr int subtile_cols   = swizzle_bytes / sizeof(T);
-
     dtype data[rows*cols]; ///< Raw data storage for the tile.
-    
-    __device__ static inline T* idx(T *ptr, int2 coord) { // naive row-major coord default
-        int r = coord.x, c = coord.y; // alias
 
-        #ifdef KITTENS_CDNA4
-        const int outer_idx = c/subtile_cols;
-        const uint64_t addr = (uint64_t)(&ptr[outer_idx*rows*subtile_cols + r*subtile_cols + c%subtile_cols]);
-        const int swizzle = ((addr % swizzle_repeat) >> 8) << 4;
-        #else
-        const int outer_idx = c/subtile_cols;
-        const uint64_t addr = (uint64_t)(&ptr[outer_idx*rows*subtile_cols + r*subtile_cols + c%subtile_cols]);
-        const int swizzle = ((addr % swizzle_repeat) >> 7) << 3;
-        #endif
-
-        return (T*)(addr ^ swizzle);
-    }
-    __device__ static inline uint32_t idx(uint32_t ptr, int2 coord) {
-        int r = coord.x, c = coord.y; // alias
-
-        #ifdef KITTENS_CDNA4
-        const int outer_idx = c/subtile_cols;
-        const uint32_t addr = ptr + sizeof(T)*(outer_idx*rows*subtile_cols + r*subtile_cols + c%subtile_cols);
-        const int swizzle = ((addr % swizzle_repeat) >> 8) << 4;
-        #else
-        const int outer_idx = c/subtile_cols;
-        const uint32_t addr = ptr + sizeof(T)*(outer_idx*rows*subtile_cols + r*subtile_cols + c%subtile_cols);
-        const int swizzle = ((addr % swizzle_repeat) >> 7) << 3;
-        #endif
-
-        return (addr ^ swizzle);
-    }
-    /**
-     * @brief Access a shared tile element using a row and column, as if the tile were row-major.
-     *
-     * This is the preferred way to access memory within a shared tile, which abstracts
-     * indexing calculations for swizzled layouts.
-     */
-    __device__ inline       dtype& operator[](const int2 &rowcol)       {
-        return *idx(data, rowcol);
-    }
-    __device__ inline const dtype& operator[](const int2 &rowcol) const {
-        return *(const dtype*)idx((dtype*)data, rowcol);
-    }
-    __device__ inline       dtype& operator[](int idx)       {
-        return data[idx];
-    }
-    __device__ inline const dtype& operator[](int idx) const {
-        return data[idx];
+    __device__ __forceinline__ static const uint32_t swizzle(int2 coord) {
+        return shape::template swizzle<T>(coord);
     }
 
     // vector types
     using col_vec = sv<dtype, rows>; ///< Column vector type for this tile
     using row_vec = sv<dtype, cols>; ///< Row vector type for this tile
-    template<int subtile_rows, int subtile_cols> using subtile = st_subtile<
-        st<T, rows, cols>, subtile_rows, subtile_cols
-    >; ///< A templated subtile type wrapper for this tile.
+
+    template<int subtile_rows, int subtile_cols> using subtile = st_subtile<st<_T, _rows, _cols, _shape>, subtile_rows, subtile_cols>;
 };
 
 
@@ -171,113 +113,45 @@ struct st_subtile {
     using T = ST::T;
     using T2 = ST::T2;
     using dtype = T; ///< Data type of the elements in the tile.
+    using shape = ST::shape;
 
-    static constexpr int underlying_rows          = ST::underlying_rows;
-    static_assert(underlying_rows % kittens::TILE_ROW_DIM<T> == 0, "Underlying rows must be divisible by the tile dimension");
-    static constexpr int underlying_cols          = ST::underlying_cols;
-    static_assert(underlying_cols % kittens::TILE_COL_DIM<T> == 0, "Underlying cols must be divisible by the tile dimension");
-    static constexpr int underlying_height        = ST::underlying_height;
-    static constexpr int underlying_width         = ST::underlying_width;
-    static constexpr int underlying_num_elements  = ST::underlying_num_elements;
+    static constexpr int underlying_rows              = ST::underlying_rows;
+    static constexpr int underlying_cols              = ST::underlying_cols;
+    static constexpr int underlying_num_elements      = ST::underlying_num_elements;
+
+    static constexpr int underlying_subtile_cols      = ST::underlying_subtile_cols;
+    static constexpr int underlying_subtile_row_bytes = ST::underlying_subtile_row_bytes;
+    static constexpr int underlying_subtile_rows      = ST::underlying_subtile_rows;
+    static constexpr int underlying_subtile_elements  = ST::underlying_subtile_elements;
+    static constexpr int underlying_subtile_bytes     = ST::underlying_subtile_bytes;
+    static constexpr int underlying_subtile_bytes_per_thread = ST::underlying_subtile_bytes_per_thread;
+    
+    static constexpr int underlying_subtiles_per_row  = ST::underlying_subtiles_per_row;
+    static constexpr int underlying_subtiles_per_col  = ST::underlying_subtiles_per_col;
 
     static constexpr int rows                = _subtile_rows;
-    static_assert(rows % kittens::TILE_ROW_DIM<T> == 0, "Rows must be divisible by the tile dimension");
     static constexpr int cols                = _subtile_cols;
-    static_assert(cols % kittens::TILE_COL_DIM<T> == 0, "Cols must be divisible by the tile dimension");
-    static constexpr int height              = rows / kittens::TILE_ROW_DIM<T>;
-    static constexpr int width               = cols / kittens::TILE_COL_DIM<T>;
     static constexpr int num_elements        = rows * cols;
 
-    static constexpr int swizzle_bytes = ST::swizzle_bytes;
-    static constexpr int swizzle_repeat = ST::swizzle_repeat;
-    static constexpr int subtile_cols   = ST::subtile_cols;
+    static constexpr int subtiles_per_row    = cols / underlying_subtile_cols;
+    static constexpr int subtiles_per_col    = rows / underlying_subtile_rows;
+
     dtype *data;
     int row_offset, col_offset;
 
-    __device__ st_subtile(ST &src, int2 rowcol, bool unformatted = false) {
-        #ifdef KITTENS_CDNA4
-        if constexpr (std::is_same_v<T, fp8e4m3>) {
-            if (unformatted) {
-                row_offset = rowcol.x * height * kittens::TILE_ROW_DIM<T> * kittens::TILE_COL_DIM<T> * underlying_width * sizeof(T);
-                col_offset = rowcol.y * width * kittens::TILE_COL_DIM<T> * sizeof(T);
-                data = &src.data[row_offset + col_offset];
-            } else {
-                row_offset = rowcol.x * height * underlying_width;
-                col_offset = rowcol.y * width;
-                data = &src.data[(row_offset + col_offset) * kittens::TILE_COL_DIM<T> * kittens::TILE_ROW_DIM<T> * sizeof(T)];
-            }
-        } else {
-            row_offset = rowcol.x * rows;
-            col_offset = rowcol.y * cols;
-            data = &src.data[0];
-        }
-        #else
+    __device__ st_subtile(ST &src, int2 rowcol) {
         row_offset = rowcol.x * rows;
         col_offset = rowcol.y * cols;
-        data = &src.data[0];
-        #endif
+        const int subtile_row_offset = row_offset / underlying_subtile_rows;
+        const int subtile_col_offset = col_offset / underlying_subtile_cols;
+        const int subtile_id = subtile_row_offset * underlying_subtiles_per_row + subtile_col_offset;
+        const int subtile_offset = subtile_id * underlying_subtile_elements;
+        data = &src.data[subtile_offset];
     }
 
-    __device__ inline T* idx(T *ptr, const int2 coord) { // naive row-major coord default
-        int r = coord.x+row_offset, c = coord.y+col_offset; // alias
-
-        #ifdef KITTENS_CDNA4
-        const int outer_idx = c/subtile_cols;
-        const uint64_t addr = (uint64_t)(&ptr[outer_idx*underlying_rows*subtile_cols + r*subtile_cols + c%subtile_cols]);
-        const int swizzle = ((addr % swizzle_repeat) >> 8) << 4;
-        #else
-        const int outer_idx = c/subtile_cols;
-        const uint64_t addr = (uint64_t)(&ptr[outer_idx*underlying_rows*subtile_cols + r*subtile_cols + c%subtile_cols]);
-        const int swizzle = ((addr % swizzle_repeat) >> 7) << 3;
-        #endif
-
-        return (T*)(addr ^ swizzle);
+    __device__ __forceinline__ static const uint32_t swizzle(int2 coord) {
+        return ST::swizzle(coord);
     }
-    __device__ inline const T* idx(const T *ptr, const int2 coord) const { // const version
-        int r = coord.x+row_offset, c = coord.y+col_offset; // alias
-
-        #ifdef KITTENS_CDNA4
-        const int outer_idx = c/subtile_cols;
-        const uint64_t addr = (uint64_t)(&ptr[outer_idx*underlying_rows*subtile_cols + r*subtile_cols + c%subtile_cols]);
-        const int swizzle = ((addr % swizzle_repeat) >> 8) << 4;
-        #else
-        const int outer_idx = c/subtile_cols;
-        const uint64_t addr = (uint64_t)(&ptr[outer_idx*underlying_rows*subtile_cols + r*subtile_cols + c%subtile_cols]);
-        const int swizzle = ((addr % swizzle_repeat) >> 7) << 3;
-        #endif
-
-        return (const T*)(addr ^ swizzle);
-    }
-    __device__ inline uint32_t idx(uint32_t ptr, const int2 coord) const { // naive row-major coord default
-        int r = coord.x+row_offset, c = coord.y+col_offset; // alias
-
-        #ifdef KITTENS_CDNA4
-        const int outer_idx = c/subtile_cols;
-        const uint32_t addr = ptr + sizeof(T)*(outer_idx*underlying_rows*subtile_cols + r*subtile_cols + c%subtile_cols);
-        const int swizzle = ((addr % swizzle_repeat) >> 8) << 4;
-        #else
-        const int outer_idx = c/subtile_cols;
-        const uint32_t addr = ptr + sizeof(T)*(outer_idx*underlying_rows*subtile_cols + r*subtile_cols + c%subtile_cols);
-        const int swizzle = ((addr % swizzle_repeat) >> 7) << 3;
-        #endif
-
-        return (addr ^ swizzle);
-    }
-    /**
-     * @brief Access a shared tile element using a row and column, as if the tile were row-major.
-     *
-     * This is the preferred way to access memory within a shared tile, which abstracts
-     * indexing calculations for swizzled layouts.
-     */
-    __device__ inline       dtype& operator[](const int2 &rowcol)       {
-        return *idx(data, rowcol);
-    }
-    __device__ inline const dtype& operator[](const int2 &rowcol) const {
-        return *(const dtype*)idx((dtype*)data, rowcol);
-    }
-
-    // single-coord operator[] is left undefined as it would likely be an improper use of st_subtile type.
-    // can of course be end-run by just accessing .data directly.
 
     // vector types
     using col_vec = sv<dtype, rows>;
@@ -306,8 +180,8 @@ template<typename T> concept all = requires {
 
 /* ----------  WRAPPERS FOR PRETTINESS  ---------- */
 
-template<int _height, int _width> using st_bf = st<bf16,  _height, _width>;
-template<int _height, int _width> using st_hf = st<half,  _height, _width>;
-template<int _height, int _width> using st_fl = st<float, _height, _width>;
-template<int _height, int _width> using st_fp8e4m3 = st<fp8e4m3, _height, _width>;
+template<int _height, int _width, ducks::st_shape::all _shape> using st_bf = st<bf16,  _height, _width, _shape>;
+template<int _height, int _width, ducks::st_shape::all _shape> using st_hf = st<half,  _height, _width, _shape>;
+template<int _height, int _width, ducks::st_shape::all _shape> using st_fl = st<float, _height, _width, _shape>;
+// TODO: fp8e4m3 template<int _height, int _width> using st_fp8e4m3 = st<fp8e4m3, _height, _width>;
 }

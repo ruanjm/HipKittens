@@ -10,6 +10,13 @@
 
 namespace kittens {
 
+enum class coherency {
+    cache_all = 0,
+    cache_global = 1,
+    cache_stream = 2,
+    non_temporal = 3
+};
+
 /* ----------   Shared memory utilities  ---------- */
 __device__ inline float2 load_shared_vec(uint32_t lds_off) {
     float2 result;
@@ -67,6 +74,27 @@ struct buffer_resource {
 __device__ inline buffer_resource make_buffer_resource(uint64_t ptr, uint32_t range, uint32_t config) {
     return {ptr, range, config};
 }
+__device__ inline i32x4 make_srsrc(const void* ptr, uint32_t range_bytes, uint32_t row_stride_bytes = 0) {
+    std::uintptr_t as_int = reinterpret_cast<std::uintptr_t>(ptr);   // width = sizeof(void*)
+    std::uint64_t  as_u64 = static_cast<std::uint64_t>(as_int);    // widen if host is 32-bit
+    buffer_resource rsrc = make_buffer_resource(as_u64, range_bytes, 0x110000);
+
+    row_stride_bytes &= 0x3FFF;
+    if (row_stride_bytes) {
+        // - The swizzle stride lives in bits 13:0 of word2.
+        //   Max value = 0x3FFF (8 KiB – one cache line per bank).
+        uint64_t stride_field = row_stride_bytes;
+        stride_field = stride_field | 0x4000;         // Cache swizzle
+        stride_field = stride_field | 0x8000;         // Swizzle enable
+        rsrc.ptr |= stride_field << 48;
+    }
+
+    return *reinterpret_cast<const i32x4*>(&rsrc);
+}
+
+__device__ uint32_t llvm_amdgcn_raw_buffer_load_b32(i32x4 srsrc, uint32_t voffset, uint32_t soffset, uint32_t coherency)
+    __asm("llvm.amdgcn.raw.buffer.load.i32");
+
 __device__ uint64_t llvm_amdgcn_raw_buffer_load_b64(i32x4 srsrc, uint32_t voffset, uint32_t soffset, uint32_t coherency)
     __asm("llvm.amdgcn.raw.buffer.load.i64");
 
@@ -88,31 +116,17 @@ __device__ void llvm_amdgcn_raw_buffer_store_b64(uint64_t vdata, i32x4 srsrc, ui
 __device__ void llvm_amdgcn_raw_buffer_store_b128(__uint128_t vdata, i32x4 srsrc, uint32_t voffset, uint32_t soffset, uint32_t coherency)
     __asm("llvm.amdgcn.raw.buffer.store.i128");
 
+using as3_uint32_ptr = uint32_t __attribute__((address_space(3)))*;
+using int32x4_t = int32_t __attribute__((ext_vector_type(4)));
 
-__device__ inline float2 load_global_vec2_async(const float2* gptr) {
-    float2 v;
-    // Use global_load_dwordx2 which is more cache-friendly than flat_load
-    asm volatile(
-        "global_load_dwordx2 %0, %1, off\n"
-        : "=v"(v) 
-        : "v"(gptr)
-        : "memory"
-    );
-    return v;   
-}
-
-__device__ inline float4 load_global_vec4_async(const float4* gptr) {
-    float4 v;
-    // Use global_load_dwordx4 which is more cache-friendly than flat_load
-    asm volatile(
-        "global_load_dwordx4 %0, %1, off\n"
-        : "=v"(v) 
-        : "v"(gptr)
-        : "memory"
-    );
-    return v;   
-}
-
+extern "C" __device__ void 
+llvm_amdgcn_raw_buffer_load_lds(int32x4_t rsrc, // does not change (buffer resource; scalar array?)
+                                as3_uint32_ptr lds_ptr, // does not change
+                                int size, // does not change (16 bytes)
+                                int voffset, 
+                                int soffset, 
+                                int offset,  // does not change (0); instruction offset
+                                int aux) __asm("llvm.amdgcn.raw.buffer.load.lds"); // cache coherency
 
 /* ----------   To prevent generic addressing  ---------- */
 

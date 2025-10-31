@@ -25,28 +25,12 @@ struct row {}; // for most matrices
  */
 struct col {}; // for the B-matrix of MMA ops.
 
-#ifdef KITTENS_CDNA4
-/**
- * @brief A dummy type used to identify a 32x32 layout for a register tile.
- */
-struct accumulator {};
-#endif
-
 /**
  * @brief A concept to check if a type is a register tile layout.
  */
 
-#ifdef KITTENS_CDNA4
-template<typename T>
-concept accum = std::is_same_v<T, accumulator>;
-template<typename T>
-concept classic = std::is_same_v<T, row> || std::is_same_v<T, col>;
-template<typename T>
-concept all = std::is_same_v<T, row> || std::is_same_v<T, col> || std::is_same_v<T, accumulator>;
-#else
 template<typename T>
 concept all = std::is_same_v<T, row> || std::is_same_v<T, col>;
-#endif
 
 /**
  * @brief A struct to generate a transposed layout.
@@ -54,9 +38,6 @@ concept all = std::is_same_v<T, row> || std::is_same_v<T, col>;
  */
 template<all L> struct transpose      { using type = col; };
 template<>      struct transpose<col> { using type = row; };
-#ifdef KITTENS_CDNA4
-template<>      struct transpose<accumulator> { using type = accumulator; };
-#endif
 
 } // namespace rt_layout
 } // namespace ducks

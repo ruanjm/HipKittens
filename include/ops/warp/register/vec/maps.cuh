@@ -78,6 +78,7 @@ __device__ static inline void bin_op(T &dst, const T &src, const typename T::dty
  * @param param[in] The unpacked scalar parameter for the operation.
  */
 template<typename op, ducks::rv::tile_layout T>
+requires (!std::is_same_v<typename T::dtype, typename base_types::packing<typename T::dtype>::unpacked_type>)
 __device__ static inline void bin_op(T &dst, const T &src, const typename base_types::packing<typename T::dtype>::unpacked_type &param) {
     bin_op<op, T>(dst, src, base_types::packing<typename T::dtype>::pack(param));
 }

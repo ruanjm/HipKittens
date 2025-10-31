@@ -177,7 +177,7 @@ template<typename T> struct packing {
      *
      * @return constexpr int representing number of elements within the type.
      */
-    static __device__ inline constexpr int num() { return 1; }
+    static __host__ __device__ inline constexpr int num() { return 1; }
     /**
      * @brief Packs a single T element twice (replicated) into its packed type.
      *
@@ -187,58 +187,58 @@ template<typename T> struct packing {
     static __device__ inline constexpr T pack(const auto &i);
 };
 template<> struct packing<bf16> {
-    static __device__ inline constexpr int num() { return 1; }
+    static __host__ __device__ inline constexpr int num() { return 1; }
     using unpacked_type = bf16;
     using packed_type = bf16_2;
     static __device__ inline bf16_2 pack(const bf16 &i) { return bf16_2{i, i}; }
 };
 template<> struct packing<bf16_2> {
-    static __device__ inline constexpr int num() { return 2; }
+    static __host__ __device__ inline constexpr int num() { return 2; }
     using unpacked_type = bf16;
     using packed_type = bf16_2;
     static __device__ inline bf16_2 pack(const bf16 &i) { return bf16_2{i, i}; } // this replication makes code cleaner later.
 };
 template<> struct packing<half> {
-    static __device__ inline constexpr int num() { return 1; }
+    static __host__ __device__ inline constexpr int num() { return 1; }
     using unpacked_type = half;
     using packed_type = half_2;
     static __device__ inline constexpr half_2 pack(const half &i) { return std::bit_cast<half_2>(static_cast<uint32_t>(i) << 16 | static_cast<uint32_t>(i)); }
 };
 template<> struct packing<half_2> {
-    static __device__ inline constexpr int num() { return 2; }
+    static __host__ __device__ inline constexpr int num() { return 2; }
     using unpacked_type = half;
     using packed_type = half_2;
     static __device__ inline constexpr half_2 pack(const half &i) { return std::bit_cast<half_2>(static_cast<uint32_t>(i) << 16 | static_cast<uint32_t>(i)); } // this replication makes code cleaner later.
 };
 template<> struct packing<float> {
-    static __device__ inline constexpr int num() { return 1; }
+    static __host__ __device__ inline constexpr int num() { return 1; }
     using unpacked_type = float;
     using packed_type = float2;
     static __device__ inline constexpr float2 pack(const float &i) { return float2{i, i}; }
 };
 template<> struct packing<float2> {
-    static __device__ inline constexpr int num() { return 2; }
+    static __host__ __device__ inline constexpr int num() { return 2; }
     using unpacked_type = float;
     using packed_type = float2;
     static __device__ inline constexpr float2 pack(const float &i) { return float2{i, i}; } // this replication makes code cleaner later.
 };
 template<> struct packing<int> {
-    static __device__ inline constexpr int num() { return 1; }
+    static __host__ __device__ inline constexpr int num() { return 1; }
     using unpacked_type = int;
     using packed_type = int2;
     static __device__ inline constexpr int2 pack(const int &i) { return int2{i, i}; } // this replication makes code cleaner later.
 };
 template<> struct packing<int2> {
-    static __device__ inline constexpr int num() { return 2; }
+    static __host__ __device__ inline constexpr int num() { return 2; }
     using unpacked_type = int;
     using packed_type = int2;
     static __device__ inline constexpr int2 pack(const int &i) { return int2{i, i}; } // this replication makes code cleaner later.
 };
 template<> struct packing<float4> {
-    static __device__ inline constexpr int num() { return 4; }
+    static __host__ __device__ inline constexpr int num() { return 4; }
 };
 template<> struct packing<int4> {
-    static __device__ inline constexpr int num() { return 4; }
+    static __host__ __device__ inline constexpr int num() { return 4; }
 };
 template<> struct packing<fp8e4m3> {
     static __device__ inline constexpr int num() { return 1; }
@@ -293,23 +293,16 @@ template<> struct convertor<float2, bf16_2> {
         return 	__bfloat1622float2(u);
     }
 };
+
 template<> struct convertor<bf16_2, float2> {
     static __host__ __device__ inline bf16_2 convert(const float2 &u) {
-        return bf16_2{
-            std::bit_cast<bf16>(static_cast<uint16_t>(std::bit_cast<uint32_t>(u.x) >> 16)),
-            std::bit_cast<bf16>(static_cast<uint16_t>(std::bit_cast<uint32_t>(u.y) >> 16))
-        };
+        uint32_t result;
+        asm volatile("v_cvt_pk_bf16_f32 %0, %1, %2" 
+                     : "=v"(result) 
+                     : "v"(u.x), "v"(u.y));
+        return *reinterpret_cast<bf16_2*>(&result);
     }
 };
-// template<> struct convertor<bf16_2, float2> {
-//     static __host__ __device__ inline bf16_2 convert(const float2 &u) {
-//         uint32_t result;
-//         asm volatile("v_cvt_pk_bf16_f32 %0, %1, %2" 
-//                      : "=v"(result) 
-//                      : "v"(u.x), "v"(u.y));
-//         return *reinterpret_cast<bf16_2*>(&result);
-//     }
-// };
 
 
 template<> struct convertor<float, half> {
