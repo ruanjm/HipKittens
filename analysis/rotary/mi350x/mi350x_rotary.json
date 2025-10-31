@@ -1,0 +1,67 @@
+{
+    "1024": {
+        "N": 1024,
+        "avg_time_pytorch": 0.30022837072610853,
+        "tflops_pytorch": 0.1152556232987306,
+        "avg_time_pytorch_compiled": 0.07235940992832184,
+        "tflops_pytorch_compiled": 0.47821020146898974,
+        "avg_time_aiter": 0.04209776993840933,
+        "tflops_aiter": 0.8219677206328398,
+        "avg_time_tk": 0.035702409893274306,
+        "tflops_tk": 0.9692065074441539,
+        "max_error": 0.03125,
+        "mean_error": 0.0011138916015625
+    },
+    "2048": {
+        "N": 2048,
+        "avg_time_pytorch": 0.5856605410575867,
+        "tflops_pytorch": 0.11816745563057345,
+        "avg_time_pytorch_compiled": 0.11756147034466266,
+        "tflops_pytorch_compiled": 0.5886794014833618,
+        "avg_time_aiter": 0.08007665015757084,
+        "tflops_aiter": 0.8642471415052934,
+        "avg_time_tk": 0.07148486986756325,
+        "tflops_tk": 0.9681211720496214,
+        "max_error": 0.03125,
+        "mean_error": 0.0011444091796875
+    },
+    "4096": {
+        "N": 4096,
+        "avg_time_pytorch": 1.1700428903102875,
+        "tflops_pytorch": 0.11829654549098971,
+        "avg_time_pytorch_compiled": 0.2637657696008682,
+        "tflops_pytorch_compiled": 0.5247535804568039,
+        "avg_time_aiter": 0.2340046402812004,
+        "tflops_aiter": 0.5914926808018509,
+        "avg_time_tk": 0.15051400989294053,
+        "tflops_tk": 0.9195956715155714,
+        "max_error": 0.03125,
+        "mean_error": 0.00115966796875
+    },
+    "8192": {
+        "N": 8192,
+        "avg_time_pytorch": 2.399196932315826,
+        "tflops_pytorch": 0.11538196813747817,
+        "avg_time_pytorch_compiled": 0.5186204499006272,
+        "tflops_pytorch_compiled": 0.5337700510133032,
+        "avg_time_aiter": 0.4608548906445503,
+        "tflops_aiter": 0.6006751140534381,
+        "avg_time_tk": 0.3154153710603714,
+        "tflops_tk": 0.8776492504768105,
+        "max_error": 0.03125,
+        "mean_error": 0.00115966796875
+    },
+    "16384": {
+        "N": 16384,
+        "avg_time_pytorch": 4.707702994346619,
+        "tflops_pytorch": 0.11760472754225669,
+        "avg_time_pytorch_compiled": 1.0204094600677491,
+        "tflops_pytorch_compiled": 0.5425744759003323,
+        "avg_time_aiter": 0.914069436788559,
+        "tflops_aiter": 0.6056959194972723,
+        "avg_time_tk": 0.6425463676452636,
+        "tflops_tk": 0.8616469656951785,
+        "max_error": 0.03125,
+        "mean_error": 0.00115966796875
+    }
+}

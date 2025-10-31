@@ -11,3 +11,15 @@ __pycache__/
 */printouts/*
 tests/unit/build/
 *.o
+build/
+*.egg-info/
+*.pyc
+*.pyo
+*.pyd
+*.pyw
+*.pyz
+*.pywz
+*.rocprofv3
+*.so
+*.amdgcn
+utils/__pycache__/
