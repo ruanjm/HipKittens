@@ -55,39 +55,78 @@ cd HipKittens/tests/unit
 make -j64
 ```
 
-### Run kernels
+### Quick start: running kernels
 
-GEMM:
+1. GEMM:
 ```bash
 # gemm kernel
-cd kernels/TK/gemm/bf16fp32/mi325x/256_256_64_16/
+cd kernels/gemm/bf16fp32/mi325x/256_256_64_16/
 make clean && make
 python test_python.py
 ```
+This will compare to AITER and PyTorch automatically.
+
+2. Attention forwards 
+
+GQA, Non-causal, D=128, N=2048, H=64, H_KV=8, B=16:
+```bash
+cd kernels/attn/gqa/
+make clean && make
+python test_python.py
+```
+This will compare to AITER automatically. 
+
+- Modify the ```ATTN_N``` sequence length (e.g., 1024, 2048, 4096, 8192), ```ATTN_H``` query heads and ```ATTN_H_KV``` key value heads (e.g., 16 and 16 for MHA), ```ATTN_D``` head dimension (i.e., 64 or 128) in the Makefile and test_python.py file to try other settings.
+- Use the same process for [gqa_causal](https://github.com/HazyResearch/HipKittens/tree/main/kernels/attn/gqa_causal).
+
+3. Attention backwards
+
+GQA, Non-causal, D=128, N=8192, H=64, H_KV=8, B=16:
+```bash
+cd kernels/attn/gqa_backwards/
+make clean && make
+python test_python.py 
+```
+
+- Modify the settings in the same way as stated above for forwards.
+- Try [gqa_causal_backwards](https://github.com/HazyResearch/HipKittens/tree/main/kernels/attn/gqa_causal_backwards).
+
+4. Memory bound
+
+Rotary (default B=16, H=16, D=128, N=2048)
+```bash
+cd kernels/rotary/
+make clean && make
+python test_python.py
+```
+This will compare to AITER, PyTorch, PyTorch compiled automatically.
+
+Layernorm fused (default B=16, H=16, D=128, N=4096)
+```bash
+cd kernels/layernorm/
+make clean && make
+python test_python.py
+```
+This will compare to PyTorch, PyTorch compiled automatically.
+
+
+Potental issues:
+- If you see a complaint that AITER is not building in the ```test_python.py``` files, then instal AITER from source [following this README.md](https://github.com/ROCm/aiter/tree/main). Luckily, it is very quick! You can also comment out AITER from ```test_python.py``` if you only need the HK kernel.
+- If you see an error that ```bin/hipcc/``` is not found, then edit the Makefile to replace ROCM_BUILD_DIR with ```/opt/rocm/bin/hipcc```
+
+
+### Benchmarking
+
+Under [HipKittens/analysis](https://github.com/HazyResearch/HipKittens/tree/main/analysis) we provide scripts and instructions to benchmark all the HK kernels from our paper. This will sweep over different dimensions and settings, and we provide plotting scripts. 
+
+
+### Training
+
+Under [HipKittens/training](https://github.com/HazyResearch/HipKittens/tree/main/training) we provide instructions to train either BERT or Llama models using HipKittens attention kernels, AITER kernels, or PyTorch kernels. These are lightweight. Run them within the AMD Docker.
 
 ### Resources
 
-We provide more docker information in:
-```bash
-docs/launch_docker_mi300x.md
-docs/launch_docker_mi350x.md
-```
-
-We provide information on how to setup the profiler in:
-```bash
-docs/profiling_instructions.md
-```
-
-We provide a bash script to capture pm counters and a python script to view the outputs:
-```bash
-bash profile.sh
-python analyze_prof.py # you will need to change the kernel names in here based on the kernels you're profiling
-```
-
-We provide a script to extract the assembly from rocprof generated output json files. 
-```bash
-extract_assembly.py [input.json] [output.s]
-```
+We provide resources for profiling kernels, dockers, and HipKittens in [HipKittens/docs](https://github.com/HazyResearch/HipKittens/tree/main/docs).
 
 Contribute to our [onboarding documents](https://docs.google.com/document/d/15-Zvf6e0NLX1si4ml4sUOWCDlXNMtOWKiuo6CKZMEYA/edit?usp=sharing).
 
@@ -95,6 +134,6 @@ Contribute to our [onboarding documents](https://docs.google.com/document/d/15-Z
 ### Get in touch!
 
 Contact: William Hu [willhu@stanford.edu](willhu@stanford.edu) and Simran Arora [simran@cs.stanford.edu](simran@cs.stanford.edu).
-Join us on Discord to get involved, [invitation link](https://discord.com/channels/1189498204333543425/1300872762163728550)!
+Join us on Discord to get involved, [invitation link](https://discord.com/channels/1189498204333543425/1300872762163728550)! We welcome community contributions.
 
 

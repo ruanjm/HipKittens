@@ -51,24 +51,6 @@ bash mi355x_benchmark.sh
 
 Attention forwards benchmarking:
 ```bash
-# First switch dockers
-podman pull docker.io/rocm/7.0-preview:rocm7.0_preview_pytorch_training_mi35X_alpha
-podman run -it \
-    --ipc=host \
-    --network=host \
-    --privileged \
-    --cap-add=CAP_SYS_ADMIN \
-    --cap-add=SYS_PTRACE \
-    --security-opt seccomp=unconfined \
-    --device=/dev/kfd \
-    --device=/dev/dri \
-    -v $(pwd):/workdir/ \
-    -e USE_FASTSAFETENSOR=1 \
-    -e SAFETENSORS_FAST_GPU=1 \
-    rocm/7.0-preview:rocm7.0_preview_pytorch_training_mi35X_alpha \
-    bash
-
-# Then run
 cd https://github.com/HazyResearch/AMD-benchmarking-harness/tree/main/analysis/attn/fwd/mi350x
 bash mi355x_benchmark.sh
 ```
@@ -104,7 +86,7 @@ We compare to:
 - HIPBLASLT
 - Triton
 
-To see how we produced the baseline method results, please see [analysis/baselines/README.md](https://github.com/HazyResearch/AMD-benchmarking-harness/tree/main/analysis/baselines).
+To see how we produced the baseline method results, please use the files in [analysis/baselines/](https://github.com/HazyResearch/AMD-benchmarking-harness/tree/main/analysis/baselines).
 
 
 
