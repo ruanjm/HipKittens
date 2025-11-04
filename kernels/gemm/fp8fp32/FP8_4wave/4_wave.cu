@@ -6,7 +6,6 @@
 using namespace kittens;
 
 #include "../profile_utils.cpp"
-#include "../utils.cpp"
 #include "utils.cpp"
 
 #define SIZE 8192
