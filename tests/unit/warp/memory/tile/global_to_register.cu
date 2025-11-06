@@ -78,7 +78,7 @@ void warp::memory::tile::global_to_register::tests(test_data &results) {
                          INTENSITY_4 ? 16 : -1;
                          
     using DEFAULT_ST_SHAPE = kittens::ducks::st_shape::st_16x16;
-    // TODO: fp8e4m3
+
     using RT_SHAPE_1 = kittens::ducks::rt_shape::rt_16x32;
     g2r_sweep_size_2d_warp<load_store<float>, RT_SHAPE_1, DEFAULT_ST_SHAPE, SIZE, SIZE, kittens::ducks::rt_layout::row>::run(results);
     g2r_sweep_size_2d_warp<load_store<float>, RT_SHAPE_1, DEFAULT_ST_SHAPE, SIZE, SIZE, kittens::ducks::rt_layout::col>::run(results);

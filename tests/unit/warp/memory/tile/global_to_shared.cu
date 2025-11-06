@@ -108,7 +108,7 @@ void warp::memory::tile::global_to_shared::tests(test_data &results) {
 
     using ST_SHAPE_2 = kittens::ducks::st_shape::st_16x16_swizzled;
     // NOTE: unsupported.
-    // TODO: fp8e4m3
+
     using RT_SHAPE_3 = kittens::ducks::rt_shape::rt_32x32;
     using ST_SHAPE_3 = kittens::ducks::st_shape::st_32x32;
     g2s_sweep_size_2d_warp<st_load_store<kittens::bf16>, RT_SHAPE_3, ST_SHAPE_3, SIZE, SIZE, I2_t>::run(results);

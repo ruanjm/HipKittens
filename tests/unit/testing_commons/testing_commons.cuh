@@ -383,7 +383,6 @@ struct sweep_gmem_type_2d {
         sweep_size_2d<test<float>, RT_SHAPE, ST_SHAPE, MAX_H, MAX_W, NUM_WORKERS, args...>::run(results);
         sweep_size_2d<test<kittens::bf16>, RT_SHAPE, ST_SHAPE, MAX_H, MAX_W, NUM_WORKERS, args...>::run(results);
         sweep_size_2d<test<kittens::half>, RT_SHAPE, ST_SHAPE, MAX_H, MAX_W, NUM_WORKERS, args...>::run(results);
-        // TODO: fp8e4m3 sweep_size_2d<test<kittens::fp8e4m3>, MAX_H, MAX_W, NUM_WORKERS, args...>::run(results);
     }
 };
 template<template<typename> typename test, typename RT_SHAPE, typename ST_SHAPE, int MAX_H=8, int MAX_W=8, int NUM_WORKERS=1, typename... args> using sweep_gmem_type_2d_warp = sweep_gmem_type_2d<test, RT_SHAPE, ST_SHAPE, MAX_H, MAX_W, NUM_WORKERS, args...>;

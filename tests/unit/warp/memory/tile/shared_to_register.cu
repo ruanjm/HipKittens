@@ -60,7 +60,7 @@ void warp::memory::tile::shared_to_register::tests(test_data& results) {
                          INTENSITY_2 ? 4 :
                          INTENSITY_3 ? 8 :
                          INTENSITY_4 ? 16 : -1;
-    // TODO: fp8e4m3
+
     using RT_SHAPE_1 = kittens::ducks::rt_shape::rt_32x16;
     using ST_SHAPE_1 = kittens::ducks::st_shape::st_32x16;
     sweep_size_2d_warp<sharedreg_load_store<kittens::bf16>, RT_SHAPE_1, ST_SHAPE_1,

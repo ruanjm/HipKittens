@@ -199,11 +199,7 @@ void warp::reg::tile::mma::tests(test_data &results) {
 
     // ST_SHAPE is irrelvant for these tests, so we can use a fixed shape
     using DEFAULT_ST_SHAPE = kittens::ducks::st_shape::st_16x16;
-    // TODO: fp8e4m3 - probably just add types to each test template and only do the ABt tests
-    // mma_sweep_size_warp_fp8<test_mma_ABt_fp8, SIZE, SIZE, std::integral_constant<int, 1>>::run(results);
-    // mma_sweep_size_warp_fp8<test_mma_ABt_fp8, SIZE, SIZE, std::integral_constant<int, 2>>::run(results);
-    // mma_sweep_size_warp_fp8<test_mma_ABt_fp8, SIZE, SIZE, std::integral_constant<int, 3>>::run(results);
-    // mma_sweep_size_warp_fp8<test_mma_ABt_fp8, SIZE, SIZE, std::integral_constant<int, 4>>::run(results);
+
     // bf16
     // mfma_32x32x16
     using RT_SHAPE_ACCUM_1 = kittens::ducks::rt_shape::rt_32x32;

@@ -27,6 +27,8 @@ __device__ inline static void load(RT &dst, const GL &src, const COORD &idx) {
     using U = typename GL::dtype;
     using U2 = base_types::packing<U>::packed_type;
 
+    static_assert(!std::is_same_v<kittens::base_types::packing<typename RT::dtype>::unpacked_type, fp8e4m3>, "Unsupported type for load");
+
     U *src_ptr = (U*)&src[(idx.template unit_coord<axis, 3>())];
     const int row_stride = src.template stride<axis>();
     int laneid = kittens::laneid();
@@ -51,7 +53,6 @@ __device__ inline static void load(RT &dst, const GL &src, const COORD &idx) {
                 const int col = dst.base_tile_cols*j + col_offset + k*dst.base_tile_elements_per_stride_group;
 
                 U2* tmp;
-                // TODO: fp8e4m3
                 if constexpr (std::is_same_v<U2, bf16_2> || std::is_same_v<U2, half_2>) {
 
                     // Use buffer_load_b64 for stride == 4, dtype == bf16

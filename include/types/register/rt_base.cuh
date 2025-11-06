@@ -105,5 +105,4 @@ template<typename T> concept all = requires {
 template<ducks::rt_layout::all L=ducks::rt_layout::row, ducks::rt_shape::all S=ducks::rt_shape::rt_16x16> using rt_base_fl = rt_base<float, L, S>;
 template<ducks::rt_layout::all L=ducks::rt_layout::row, ducks::rt_shape::all S=ducks::rt_shape::rt_16x16> using rt_base_bf = rt_base<bf16, L, S>;
 template<ducks::rt_layout::all L=ducks::rt_layout::row, ducks::rt_shape::all S=ducks::rt_shape::rt_16x16> using rt_base_hf = rt_base<half, L, S>;
-// TODO: fp8e4m3 template<ducks::rt_layout::all L=ducks::rt_layout::row, ducks::rt_shape::all S=ducks::rt_shape::rt_16x16> using rt_base_fp8e4m3 = rt_base<fp8e4m3, L, S>;
 }
