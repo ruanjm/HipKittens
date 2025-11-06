@@ -120,7 +120,7 @@ print(f"{out.dtype=}")
 avg_time = sum(timings) / len(timings)
 eff = efficiency(flops_ref, avg_time)
 print(f"Average execution time: {avg_time:.4f} ms")
-print(f"Performance: {eff:.2f} TFLOPS for {N}x{N} matrix multiplication.\n")
+print(f"Performance: {eff:.2f} TFLOPS for {B=} {H=} {N=} {D=} {causal=} attention.\n")
 
 # Compare against reference
 num_print = 16
