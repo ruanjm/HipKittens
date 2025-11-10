@@ -19,7 +19,7 @@
 // test_id is defined by the test, like "reg_mma" --
 // then these templates build the rest of the test name.
 // Note use of concepts to prevent template arg collisions!
-
+template <typename T> concept integral_wrapper = std::is_integral_v<decltype(T::value)>;
 // 1D test names
 template<int S, int NW> std::string generate_test_name(std::string test_id) {
     std::string label = test_id+"_["+std::to_string(S)+"]";
@@ -66,6 +66,12 @@ template<kittens::ducks::rt_shape::all RT_SHAPE, kittens::ducks::st_shape::all S
     else if constexpr (std::is_same_v<typename kittens::ducks::st_shape::st_8x32, ST_SHAPE>) label += "_[st_8x32]";
     else if constexpr (std::is_same_v<typename kittens::ducks::st_shape::st_16x128, ST_SHAPE>) label += "_[st_16x128]";
     else static_assert(false, "Unknown shape");
+    return label;
+}
+template<kittens::ducks::rt_shape::all RT_SHAPE, kittens::ducks::st_shape::all ST_SHAPE, int S, int NW, integral_wrapper _SV_S> std::string generate_test_name(std::string test_id) {
+    constexpr int SV_S = _SV_S::value;
+    std::string label = generate_test_name<RT_SHAPE,ST_SHAPE,S,NW>(test_id);
+    label += "_["+std::to_string(SV_S)+"]";
     return label;
 }
 /**
@@ -151,14 +157,11 @@ template<kittens::ducks::rt_shape::all RT_SHAPE, kittens::ducks::st_shape::all S
 
     return label;
 }
-template <typename T> concept integral_wrapper = std::is_integral_v<decltype(T::value)>;
+
 template<kittens::ducks::rt_shape::all RT_SHAPE, kittens::ducks::st_shape::all ST_SHAPE, int H, int W, int NW, integral_wrapper _ST_H> std::string generate_test_name(std::string test_id) {
     constexpr int ST_H = _ST_H::value;
     std::string label = generate_test_name<RT_SHAPE,ST_SHAPE,H,W,NW>(test_id);
     label += "_["+std::to_string(ST_H)+"x"+std::to_string(W)+"]";
-    if constexpr (NW > 1) {
-        label += "_["+std::to_string(NW)+"warps]";
-    }
     return label;
 }
 template<kittens::ducks::rt_shape::all RT_SHAPE, kittens::ducks::st_shape::all ST_SHAPE, int H, int W, int NW, integral_wrapper _ST_H, integral_wrapper _ST_W> std::string generate_test_name(std::string test_id) {
@@ -166,9 +169,6 @@ template<kittens::ducks::rt_shape::all RT_SHAPE, kittens::ducks::st_shape::all S
     constexpr int ST_W = _ST_W::value;
     std::string label = generate_test_name<RT_SHAPE,ST_SHAPE,H,W,NW>(test_id);
     label += "_["+std::to_string(ST_H)+"x"+std::to_string(ST_W)+"]";
-    if constexpr (NW > 1) {
-        label += "_["+std::to_string(NW)+"warps]";
-    }
     return label;
 }
 template<kittens::ducks::rt_shape::all RT_SHAPE, kittens::ducks::st_shape::all ST_SHAPE, int H, int W, int NW, kittens::ducks::base_types::T1 T2, kittens::ducks::base_types::T1 U2> std::string generate_test_name(std::string test_id) {

@@ -110,10 +110,12 @@ __device__ inline static void store(SV &dst, const RV &src) {
     }
     else if constexpr (std::is_same_v<typename RV::layout, naive_l>) {
         const int offset = laneid * RV::inner_dim;
-        #pragma unroll
-        for(int i = 0; i < RV::inner_dim; i++) {
-            int idx = offset + i;
-            dst.data[idx] = base_types::convertor<U, T>::convert(src[0][i]);
+        if (offset < RV::length) {
+            #pragma unroll
+            for(int i = 0; i < RV::inner_dim; i++) {
+                int idx = offset + i;
+                dst.data[idx] = base_types::convertor<U, T>::convert(src[0][i]);
+            }
         }
     }
 }

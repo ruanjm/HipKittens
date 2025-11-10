@@ -15,8 +15,8 @@ struct shared_vec_load_store {
     }
     template<typename RT_SHAPE, typename ST_SHAPE, typename dtype, int S, int NW, kittens::ducks::gl::all GL> __device__ static void device_func(const GL &input, const GL &output) {
         extern __shared__ kittens::alignment_dummy __shm[]; // this is the CUDA shared memory
-        kittens::shared_allocator<RT_SHAPE::cols*S> al((int*)&__shm[0]); 
-        kittens::sv<dtype, RT_SHAPE::cols*S> &shared_vec = al.template allocate<kittens::sv<dtype, RT_SHAPE::cols*S>>();
+        kittens::shared_allocator<ST_SHAPE::cols*S> al((int*)&__shm[0]); 
+        kittens::sv<dtype, ST_SHAPE::cols*S> &shared_vec = al.template allocate<kittens::sv<dtype, ST_SHAPE::cols*S>>();
         kittens::load(shared_vec, input, {});
         kittens::store(output, shared_vec, {});
     }

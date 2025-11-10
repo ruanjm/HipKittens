@@ -4,8 +4,6 @@
 
 #include "testing_commons.cuh"
 
-#include "maps.cuh"
-#include "reductions.cuh"
 #include "conversions.cuh"
 
 namespace warp {
