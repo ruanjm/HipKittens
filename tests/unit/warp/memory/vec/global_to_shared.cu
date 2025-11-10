@@ -5,7 +5,10 @@
 template<typename T>
 struct shared_vec_load_store {
     using dtype = T;
-    template<typename RT_SHAPE, typename ST_SHAPE, int S, int NW> using valid = std::bool_constant<NW == 1 && S<=64 
+    template<typename RT_SHAPE, typename ST_SHAPE, int S, int NW> using valid = std::bool_constant<
+        NW == 1 && S<=64 
+        && S*ST_SHAPE::cols*sizeof(T) <= kittens::MAX_SHARED_MEMORY
+        && (S*ST_SHAPE::cols*sizeof(T)) % (kittens::WARP_THREADS * 4) == 0
     >;
     static inline const std::string test_identifier = std::is_same_v<dtype, kittens::bf16> ? "shared_vec_loadstore_gmem=bf16" :
                                                       std::is_same_v<dtype, kittens::half> ? "shared_vec_loadstore_gmem=half" :
@@ -18,6 +21,8 @@ struct shared_vec_load_store {
         kittens::shared_allocator<ST_SHAPE::cols*S> al((int*)&__shm[0]); 
         kittens::sv<dtype, ST_SHAPE::cols*S> &shared_vec = al.template allocate<kittens::sv<dtype, ST_SHAPE::cols*S>>();
         kittens::load(shared_vec, input, {});
+        __builtin_amdgcn_s_waitcnt(0);
+        __builtin_amdgcn_s_barrier();
         kittens::store(output, shared_vec, {});
     }
 };

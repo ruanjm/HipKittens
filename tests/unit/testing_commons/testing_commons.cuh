@@ -112,8 +112,8 @@ template<kittens::ducks::rt_shape::all RT_SHAPE, int H, int W, int NW, integral_
 template<kittens::ducks::rt_shape::all RT_SHAPE, kittens::ducks::st_shape::all ST_SHAPE, int H, int W, int NW> std::string generate_test_name(std::string test_id) {
     std::string label = generate_test_name<H,W,NW>(test_id);
 
-    static_assert(RT_SHAPE::cols / ST_SHAPE::cols >= 1 , "RT_SHAPE::cols must be a positive factor of ST_SHAPE::cols");
-    static_assert(RT_SHAPE::rows / ST_SHAPE::rows >= 1 , "RT_SHAPE::rows must be a positive factor of ST_SHAPE::rows");
+    static_assert((RT_SHAPE::cols % ST_SHAPE::cols == 0 || ST_SHAPE::cols % RT_SHAPE::cols == 0), "RT_SHAPE::cols must be a positive factor of ST_SHAPE::cols or vice versa");
+    static_assert((RT_SHAPE::rows % ST_SHAPE::rows == 0 || ST_SHAPE::rows % RT_SHAPE::rows == 0), "RT_SHAPE::rows must be a positive factor of ST_SHAPE::rows or vice versa");
 
     // rt shapes
     if constexpr (std::is_same_v<typename kittens::ducks::rt_shape::rt_16x16, RT_SHAPE>) label += "_[rt_16x16]";
@@ -181,9 +181,6 @@ template<kittens::ducks::rt_shape::all RT_SHAPE, kittens::ducks::st_shape::all S
 }
 template<kittens::ducks::rt_shape::all RT_SHAPE, kittens::ducks::st_shape::all ST_SHAPE, int H, int W, int NW, kittens::ducks::base_types::T1 T2, kittens::ducks::base_types::T1 U2> std::string generate_test_name(std::string test_id) {
     std::string label = generate_test_name<H,W,NW>(test_id);
-
-    static_assert(RT_SHAPE::cols / ST_SHAPE::cols >= 1 , "RT_SHAPE::cols must be a positive factor of ST_SHAPE::cols");
-    static_assert(RT_SHAPE::rows / ST_SHAPE::rows >= 1 , "RT_SHAPE::rows must be a positive factor of ST_SHAPE::rows");
 
     // shapes
     if constexpr (std::is_same_v<typename kittens::ducks::rt_shape::rt_16x16, RT_SHAPE>) label += "_[rt_16x16]";
@@ -344,5 +341,49 @@ struct sweep_gmem_type_2d {
     }
 };
 template<template<typename> typename test, typename RT_SHAPE, typename ST_SHAPE, int MAX_H=8, int MAX_W=8, int NUM_WORKERS=1, typename... args> using sweep_gmem_type_2d_warp = sweep_gmem_type_2d<test, RT_SHAPE, ST_SHAPE, MAX_H, MAX_W, NUM_WORKERS, args...>;
+
+template<typename Ker, typename RT_SHAPE, typename ST_SHAPE, typename T, int H, int W, int NW, kittens::ducks::gl::all GL, typename... args>
+static __global__ void g2s_global_wrapper_2d(const GL input, const GL output) {
+    Ker::template device_func<RT_SHAPE, ST_SHAPE, T, H, W, NW, GL, args...>(input, output);
+}
+template<typename test, typename RT_SHAPE, typename ST_SHAPE, int H, int W, int NUM_WORKERS, typename axis, typename... args>
+struct g2s_wrapper_2d {
+    using dtype = gmem_dtype<test>; // defaults to bf16 in global memory if the test doesn't specify.
+    static void run(test_data& results) {
+        test_info this_result;
+        this_result.label = generate_test_name<RT_SHAPE, ST_SHAPE, H, W, NUM_WORKERS, args...>(test::test_identifier);
+        if constexpr (test::template valid<RT_SHAPE, ST_SHAPE, H, W, NUM_WORKERS, axis, args...>::value) {
+            constexpr int B = 3, D = 1, R = 4, C = 5;
+            constexpr int SIZE = H*W*B*D*R*C*ST_SHAPE::cols*ST_SHAPE::rows;
+            // initialize
+            dtype *d_i, *d_o;
+            std::vector<float> i_ref(SIZE);
+            std::vector<float> o_ref(SIZE);
+            initialize(&d_i, &d_o, i_ref, o_ref);
+            // make descriptors
+            using GL = typename kittens::gl<dtype, -1, -1, -1, ST_SHAPE::cols*C*W>;
+            static_assert(axis::value==0 || axis::value==1 || axis::value==2, "Axis must be 0, 1, or 2.");
+            GL input  (d_i, (axis::value==0?H*ST_SHAPE::rows:1)*B, (axis::value==1?H*ST_SHAPE::rows:1)*D, (axis::value==2?H*ST_SHAPE::rows:1)*R, nullptr);
+            GL output (d_o, (axis::value==0?H*ST_SHAPE::rows:1)*B, (axis::value==1?H*ST_SHAPE::rows:1)*D, (axis::value==2?H*ST_SHAPE::rows:1)*R, nullptr); 
+            // run kernel
+            hipFuncSetAttribute(
+                reinterpret_cast<const void*>(global_wrapper_2d<test, RT_SHAPE, ST_SHAPE, dtype, H, W, NUM_WORKERS, GL, axis, args...>),
+                hipFuncAttributeMaxDynamicSharedMemorySize,
+                kittens::MAX_SHARED_MEMORY
+            );
+            global_wrapper_2d<test, RT_SHAPE, ST_SHAPE, dtype, H, W, NUM_WORKERS, GL, axis, args...><<<1, NUM_WORKERS*kittens::WARP_THREADS, kittens::MAX_SHARED_MEMORY>>>(input, output);
+            // fill in correct results on cpu
+            test::template host_func<H, W, NUM_WORKERS, GL, axis, args...>(i_ref, o_ref);
+            // check and cleanup
+            this_result.result = validate(d_i, d_o, i_ref, o_ref, this_result.label, W*ST_SHAPE::cols);
+        }
+        else {
+            this_result.result = test_result::INVALID;
+        }
+        results.push_back(this_result);
+    }
+};
+template<typename test, typename RT_SHAPE, typename ST_SHAPE, int MAX_H=8, int MAX_W=8, int NUM_WORKERS=1, typename... args> using g2s_sweep_size_2d = loop_h<g2s_wrapper_2d, test, RT_SHAPE, ST_SHAPE, MAX_H, MAX_W, NUM_WORKERS, MAX_H, args...>;
+template<typename test, typename RT_SHAPE, typename ST_SHAPE, int MAX_H=8, int MAX_W=8, typename... args> using g2s_sweep_size_2d_warp = g2s_sweep_size_2d<test, RT_SHAPE, ST_SHAPE, MAX_H, MAX_W, 1, args...>;
 
 template<typename T> concept gl_t = kittens::ducks::gl::all<T>;

@@ -36,7 +36,7 @@ struct st_16x16 {
 
         const uint32_t offset = sizeof(T)*(r*cols + c);
 
-        if constexpr (sizeof(T) == 2) {
+        if constexpr (sizeof(T) == 2 || sizeof(T) == 4) {
             return offset;
         } else {
             static_assert(false, "Unsupported type");
@@ -71,6 +71,8 @@ struct st_16x16_swizzled {
             const int swizzle = ((offset % 512) >> 7) << 3;
             const int swizzled_offset = offset ^ swizzle;
             return swizzled_offset;
+        } else if constexpr (sizeof(T) == 4) {
+            return offset;
         } else {
             static_assert(false, "Unsupported type");
         }
@@ -103,6 +105,8 @@ struct st_32x32 {
             const int second_swizzle = ((offset % 2048) >> 10) << 4;
             const int swizzled_offset = offset ^ first_swizzle ^ second_swizzle;
             return swizzled_offset;
+        } else if constexpr (sizeof(T) == 4) {
+            return offset;
         } else {
             static_assert(false, "Unsupported type");
         }
@@ -133,6 +137,8 @@ struct st_16x32 {
             const int swizzle = ((offset % 1024) >> 9) << 5;
             const int swizzled_offset = offset ^ swizzle;
             return swizzled_offset;
+        } else if constexpr (sizeof(T) == 4) {
+            return offset;
         } else {
             static_assert(false, "Unsupported type");
         }
@@ -163,6 +169,8 @@ struct st_32x16 {
             const int swizzle = ((offset % 1024) >> 9) << 4;
             const int swizzled_offset = offset ^ swizzle;
             return swizzled_offset;
+        } else if constexpr (sizeof(T) == 4) {
+            return offset;
         } else {
             static_assert(false, "Unsupported type");
         }
@@ -189,7 +197,7 @@ struct st_8x32 {
 
         const uint32_t offset = sizeof(T)*(r*cols + c);
 
-        if constexpr (sizeof(T) == 2) {
+        if constexpr (sizeof(T) == 2 || sizeof(T) == 4) {
             return offset;
         } else {
             static_assert(false, "Unsupported type");

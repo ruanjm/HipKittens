@@ -35,14 +35,6 @@ __device__ static inline void load(ST &dst, const GL &src, const COORD &idx, con
     kittens::load<2, false, ST, GL, COORD, GROUP_THREADS>(dst, src, idx, swizzled_offsets);
 }
 template<int axis, bool assume_aligned, ducks::st::all ST, ducks::gl::all GL, ducks::coord::tile COORD=coord<ST>>
-__device__ static inline void load(ST &dst, const GL &src, const COORD &idx, const uint32_t *swizzled_offsets, int warp_id) {
-    kittens::load<axis, assume_aligned, ST, GL, COORD, GROUP_THREADS>(dst, src, idx, swizzled_offsets);
-}
-template<ducks::st::all ST, ducks::gl::all GL, ducks::coord::tile COORD=coord<ST>> // default case
-__device__ static inline void load(ST &dst, const GL &src, const COORD &idx, const uint32_t *swizzled_offsets, int warp_id) {
-    kittens::load<2, false, ST, GL, COORD, GROUP_THREADS>(dst, src, idx, swizzled_offsets);
-}
-template<int axis, bool assume_aligned, ducks::st::all ST, ducks::gl::all GL, ducks::coord::tile COORD=coord<ST>>
 __device__ static inline void load(ST &dst, const GL &src, const COORD &idx, const uint32_t *__restrict__ swizzled_offsets, i32x4 srd, const void* base_ptr, uint32_t lds_base) {
     kittens::load<axis, assume_aligned, ST, GL, COORD, GROUP_THREADS>(dst, src, idx, swizzled_offsets, srd, base_ptr, lds_base);
 }
