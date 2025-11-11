@@ -2,6 +2,8 @@ import json
 import matplotlib.pyplot as plt
 import numpy as np
 
+
+
 mi355x_gqa_baselines_causal = {
     "ck": {
         "1024": 542.83,
@@ -9,6 +11,13 @@ mi355x_gqa_baselines_causal = {
         "4096": 735.92,
         "8192": 783.53,
         "16384": 804.24,
+    },
+    "triton": {
+        "1024": 355.077782,
+        "2048": 450.211863,
+        "4096": 491.634949,
+        "8192": 655.760443,
+        "16384": 745.645985,
     },
     "torch": {
         "1024": 226.41,
@@ -27,6 +36,13 @@ mi355x_gqa_baselines_non_causal = {
         "8192": 805.35,
         "16384": 806.48,
     },
+    "triton": {
+        "1024": 735.516728,
+        "2048": 802.428351,
+        "4096": 857.724312,
+        "8192": 865.103837,
+        "16384": 861.238370,
+    },
     "torch": {
         "1024": 522.29,
         "2048": 668.73,
@@ -35,7 +51,6 @@ mi355x_gqa_baselines_non_causal = {
         "16384": 704.23,
     }
 }
-
 
 # B = 16, H = 16, D = 128.
 mi355x_mha_baselines_causal = {
@@ -46,6 +61,13 @@ mi355x_mha_baselines_causal = {
         "8192": 755.79,
         "16384": 799.67,
     },
+    "triton": {
+        "1024": 284.631187,
+        "2048": 372.463081,
+        "4096": 444.170321,
+        "8192": 609.744767,
+        "16384": 697.219085,
+    },
     "torch": {
         "1024": 226.41,
         "2048": 383.09,
@@ -54,7 +76,6 @@ mi355x_mha_baselines_causal = {
         "16384": 666.56,
     }
 }
-
 
 # B = 16, H = 16, D = 128.
 mi355x_mha_baselines_non_causal = {
@@ -65,6 +86,13 @@ mi355x_mha_baselines_non_causal = {
         "8192": 762.47,
         "16384": 821.81,
     },
+     "triton": {
+        "1024": 603.598816,
+        "2048": 731.640900,
+        "4096": 817.375312,
+        "8192": 853.588397,
+        "16384": 865.080935,
+    },
     "torch": {
         "1024": 522.29,
         "2048": 668.73,
@@ -73,7 +101,6 @@ mi355x_mha_baselines_non_causal = {
         "16384": 704.23,
     }
 }
-
 
 colors = ["#8E69B8", "#E59952", "#68AC5A", "#7CB9BC", "#DE836B"]
 
@@ -110,22 +137,28 @@ for device in ['mi355x']:
 
         torch_tflops = []
         ck_tflops = []
+        triton_tflops = []
         if setting == 'd64_mha_causal_fwd' and device == 'mi355x':
             torch_tflops = [mi355x_mha_baselines_causal['torch'][str(size)] for size in matrix_sizes]
             ck_tflops = [mi355x_mha_baselines_causal['ck'][str(size)] for size in matrix_sizes]
+            triton_tflops = [mi355x_mha_baselines_causal['triton'][str(size)] for size in matrix_sizes]
         elif setting == 'd64_mha_non_causal_fwd' and device == 'mi355x':
             torch_tflops = [mi355x_mha_baselines_non_causal['torch'][str(size)] for size in matrix_sizes]
             ck_tflops = [mi355x_mha_baselines_non_causal['ck'][str(size)] for size in matrix_sizes]
+            triton_tflops = [mi355x_mha_baselines_non_causal['triton'][str(size)] for size in matrix_sizes]
         elif setting == 'd64_gqa_causal_fwd' and device == 'mi355x':
             torch_tflops = [mi355x_gqa_baselines_causal['torch'][str(size)] for size in matrix_sizes]
             ck_tflops = [mi355x_gqa_baselines_causal['ck'][str(size)] for size in matrix_sizes]
+            triton_tflops = [mi355x_gqa_baselines_causal['triton'][str(size)] for size in matrix_sizes]
         elif setting == 'd64_gqa_non_causal_fwd' and device == 'mi355x':
             torch_tflops = [mi355x_gqa_baselines_non_causal['torch'][str(size)] for size in matrix_sizes]
             ck_tflops = [mi355x_gqa_baselines_non_causal['ck'][str(size)] for size in matrix_sizes]
-            
+            triton_tflops = [mi355x_gqa_baselines_non_causal['triton'][str(size)] for size in matrix_sizes]
+
         # Process data to separate OOM values
         torch_vals, torch_oom = process_data(torch_tflops) if torch_tflops else ([], [])
         ck_vals, ck_oom = process_data(ck_tflops) if ck_tflops else ([], [])
+        triton_vals, triton_oom = process_data(triton_tflops) if triton_tflops else ([], [])
 
         # Calculate max for numeric values only
         numeric_vals = aiter_tflops + tk_tflops
@@ -133,6 +166,8 @@ for device in ['mi355x']:
             numeric_vals.extend([v for v in torch_vals if v != 0])
         if ck_vals:
             numeric_vals.extend([v for v in ck_vals if v != 0])
+        if triton_vals:
+            numeric_vals.extend([v for v in triton_vals if v != 0])
         max_tflops = max(numeric_vals) if numeric_vals else 100
 
         # Create bar chart
@@ -145,10 +180,11 @@ for device in ['mi355x']:
         third_bar_start = x
         fourth_bar_start = x + width
         fifth_bar_start = x + 2*width
-        bars0 = ax.bar(third_bar_start, aiter_tflops, width, label='AITER (ASM)', color=colors[0])
-        bars1 = ax.bar(fourth_bar_start, tk_tflops, width, label='HipKittens', color=colors[3])
+        bars0 = ax.bar(fourth_bar_start, aiter_tflops, width, label='AITER (ASM)', color=colors[0])
+        bars1 = ax.bar(fifth_bar_start, tk_tflops, width, label='HipKittens', color=colors[3])
+        bars2 = ax.bar(second_bar_start, triton_vals, width, label='Triton', color=colors[2])
         bars3 = ax.bar(first_bar_start, torch_vals, width, label='PyTorch SDPA', color=colors[1])
-        bars4 = ax.bar(second_bar_start, ck_vals, width, label='Composable Kernel', color=colors[4])
+        bars4 = ax.bar(third_bar_start, ck_vals, width, label='Composable Kernel', color=colors[4])
 
 
         fontsize = 11
@@ -168,6 +204,11 @@ for device in ['mi355x']:
                     f'{value:.0f}', ha='center', va='bottom', fontsize=fontsize)
 
         for bar, value in zip(bars1, tk_tflops):
+            height = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width()/2., height + max_tflops * 0.01,
+                    f'{value:.0f}', ha='center', va='bottom', fontsize=fontsize)
+
+        for bar, value in zip(bars2, triton_vals):
             height = bar.get_height()
             ax.text(bar.get_x() + bar.get_width()/2., height + max_tflops * 0.01,
                     f'{value:.0f}', ha='center', va='bottom', fontsize=fontsize)

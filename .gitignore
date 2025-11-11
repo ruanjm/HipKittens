@@ -23,3 +23,7 @@ build/
 *.so
 *.amdgcn
 utils/__pycache__/
+*x86_64-unknown-linux-gnu*
+*amdhsa.hipfb
+*amd-amdhsa-gfx950.hipi
+*amd-amdhsa-gfx950.bc

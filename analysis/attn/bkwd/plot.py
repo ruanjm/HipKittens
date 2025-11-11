@@ -3,6 +3,20 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
+def flops(batch, seqlen, nheads, headdim, causal, mode="bwd"):
+    assert mode in ["fwd", "bwd", "fwd_bwd"]
+    f = 4 * batch * seqlen**2 * nheads * headdim // (2 if causal else 1)
+    return f if mode == "fwd" else (2.5 * f if mode == "bwd" else 3.5 * f)
+
+def efficiency(time, flop):
+    """Calculate efficiency in TFLOPS given time in ms and flop count in FLOPS."""
+    flop = flop / 1e12  # convert to TFLOPS
+    time = time / 1e3   # convert to seconds
+    return flop / time
+
+# Note that CK computes the flops differently than the other frameworks, so we instead use their reported wall clock time and adjust for the consistent flop count.
+# See: https://github.com/ROCm/composable_kernel/blob/9f33b7cfd3df3fcfd540f7633b0abd7019935761/example/ck_tile/01_fmha/fmha_bwd_runner.hpp#L212
+
 # MHA baselines (B=16, H=16, D=128)
 mi355x_mha_baselines_causal = {
     "triton": {
@@ -13,11 +27,11 @@ mi355x_mha_baselines_causal = {
         "16384": 251,
     },
     "ck": {
-        "1024": 517.46,
-        "2048": 749.49,
-        "4096": 911.59,
-        "8192": 961.69,
-        "16384": 1080.52,
+        "1024": efficiency(0.666,flops(batch=16, seqlen=1024, nheads=16, headdim=128, causal=True, mode="bwd")),
+        "2048": efficiency(1.833,flops(batch=16, seqlen=2048, nheads=16, headdim=128, causal=True, mode="bwd")),
+        "4096": efficiency(6.032,flops(batch=16, seqlen=4096, nheads=16, headdim=128, causal=True, mode="bwd")),
+        "8192": efficiency(22.922,flops(batch=16, seqlen=8192, nheads=16, headdim=128, causal=True, mode="bwd")),
+        "16384": efficiency(81.486,flops(batch=16, seqlen=16384, nheads=16, headdim=128, causal=True, mode="bwd")),
     },
     "torch": {
         "1024": 109.51,
@@ -28,38 +42,14 @@ mi355x_mha_baselines_causal = {
     },
 }
 
-mi350x_mha_baselines_causal = {
-    "triton": {
-        "1024": 139.080476,
-        "2048": 163.599388,
-        "4096": 188.696534,
-        "8192": 200.207510,
-        "16384": 206.924580,
-    },
-    "ck": {
-        "1024": 489.78,
-        "2048": 698.71,
-        "4096": 798.36,
-        "8192": 868.01,
-        "16384": 927.37,
-    },
-    "torch": {
-        "1024": 103.58,
-        "2048": 145.20,
-        "4096": 131.52,
-        "8192": 208.90,
-        "16384": 239.38,
-    },
-}
-
 mi355x_mha_baselines_non_causal = { 
     # triton not available for non-causal bwd attn
     "ck": {
-        "1024": 365.47,
-        "2048": 427.98,
-        "4096": 447.64,
-        "8192": 469.74,
-        "16384": 470.02,
+        "1024": efficiency(0.942,flops(batch=16, seqlen=1024, nheads=16, headdim=128, causal=False, mode="bwd")),
+        "2048": efficiency(3.214,flops(batch=16, seqlen=2048, nheads=16, headdim=128, causal=False, mode="bwd")),
+        "4096": efficiency(12.345,flops(batch=16, seqlen=4096, nheads=16, headdim=128, causal=False, mode="bwd")),
+        "8192": efficiency(46.844,flops(batch=16, seqlen=8192, nheads=16, headdim=128, causal=False, mode="bwd")),
+        "16384": efficiency(186.751,flops(batch=16, seqlen=16384, nheads=16, headdim=128, causal=False, mode="bwd")),
     },
     "torch": {
         "1024": 220.27,
@@ -67,24 +57,6 @@ mi355x_mha_baselines_non_causal = {
         "4096": 301.24,
         "8192": 309.30,
         "16384": 311.66,
-    },
-}
-
-mi350x_mha_baselines_non_causal = { 
-    # triton not available for non-causal bwd attn
-    "ck": {
-        "1024": 344.08,
-        "2048": 404.38,
-        "4096": 419.94,
-        "8192": 445.81,
-        "16384": 446.31,
-    },
-    "torch": {
-        "1024": 207.01,
-        "2048": 254.13,
-        "4096": 274.05,
-        "8192": 286.45,
-        "16384": 290.61,
     },
 }
 
@@ -92,11 +64,11 @@ mi350x_mha_baselines_non_causal = {
 mi355x_gqa_baselines_causal = {
     # triton not available for gqa bwd attn
     "ck": {
-        "1024": 543.11,
-        "2048": 810.94,
-        "4096": 945.84,
-        "8192": 977.65,
-        "16384": 1079.00,
+        "1024": efficiency(2.524, flops(batch=16, seqlen=1024, nheads=64, headdim=128, causal=True, mode="bwd")),
+        "2048": efficiency(6.807, flops(batch=16, seqlen=2048, nheads=64, headdim=128, causal=True, mode="bwd")),
+        "4096": efficiency(23.290, flops(batch=16, seqlen=4096, nheads=64, headdim=128, causal=True, mode="bwd")),
+        "8192": efficiency(89.926, flops(batch=16, seqlen=8192, nheads=64, headdim=128, causal=True, mode="bwd")),
+        "16384": efficiency(325.060, flops(batch=16, seqlen=16384, nheads=64, headdim=128, causal=True, mode="bwd")),
     },
     "torch": {
         "1024": 109.51,
@@ -107,32 +79,14 @@ mi355x_gqa_baselines_causal = {
     },
 }
 
-mi350x_gqa_baselines_causal = {
-    # triton not available for gqa bwd attn
-    "ck": {
-        "1024": 510.38,
-        "2048": 746.08,
-        "4096": 819.23,
-        "8192": 879.51,
-        "16384": 911.87,
-    },
-    "torch": {
-        "1024": 103.58,
-        "2048": 145.20,
-        "4096": 131.52,
-        "8192": 208.90,
-        "16384": 239.38,
-    },
-}
-
 mi355x_gqa_baselines_non_causal = {
     # triton not available for gqa bwd attn
     "ck": {
-        "1024": 368.51,
-        "2048": 428.20,
-        "4096": 445.61,
-        "8192": 464.20,
-        "16384": 467.18,
+        "1024": efficiency(3.737,flops(batch=16, seqlen=1024, nheads=64, headdim=128, causal=False, mode="bwd")),
+        "2048": efficiency(12.845,flops(batch=16, seqlen=2048, nheads=64, headdim=128, causal=False, mode="bwd")),
+        "4096": efficiency(49.213,flops(batch=16, seqlen=4096, nheads=64, headdim=128, causal=False, mode="bwd")),
+        "8192": efficiency(190.167,flops(batch=16, seqlen=8192, nheads=64, headdim=128, causal=False, mode="bwd")),
+        "16384": efficiency(757.375,flops(batch=16, seqlen=16384, nheads=64, headdim=128, causal=False, mode="bwd")),
     },
     "torch": {
         "1024": 220.27,
@@ -142,25 +96,6 @@ mi355x_gqa_baselines_non_causal = {
         "16384": 311.66,
     },
 }
-
-mi350x_gqa_baselines_non_causal = {
-    # triton not available for gqa bwd attn
-    "ck": {
-        "1024": 348.40,
-        "2048": 403.89,
-        "4096": 418.79,
-        "8192": 434.00,
-        "16384": 439.18,
-    },
-    "torch": {
-        "1024": 207.01,
-        "2048": 254.13,
-        "4096": 274.05,
-        "8192": 286.45,
-        "16384": 290.61,
-    },
-}
-
 
 colors = ["#8E69B8", "#E59952", "#68AC5A", "#7CB9BC", "#DE836B"]
 
@@ -342,7 +277,6 @@ for device in ['mi350x', 'mi355x']:
         ax.set_xticklabels(matrix_sizes, fontsize=16)
         ax.tick_params(axis='y', labelsize=16)
         ax.legend(fontsize=14)
-
         plt.tight_layout()
         plt.show()
 
