@@ -147,10 +147,13 @@ Join us on Discord to get involved, [invitation link](https://discord.com/channe
 
 If you use or build on this work, please consider citing:
 ```
-@article{chen2021pixelated,
-  title={Pixelated Butterfly: Simple and Efficient Sparse training for Neural Network Models},
-  author={Chen, Beidi and Dao, Tri and Liang, Kaizhao and Yang, Jiaming and Song, Zhao and Rudra, Atri and R{\'e}, Christopher},
-  booktitle={International Conference on Learning Representations}
-  year={2021}
+@misc{hu2025hipkittensfastfuriousamd,
+      title={HipKittens: Fast and Furious AMD Kernels}, 
+      author={William Hu and Drew Wadsworth and Sean Siddens and Stanley Winata and Daniel Y. Fu and Ryann Swann and Muhammad Osama and Christopher Ré and Simran Arora},
+      year={2025},
+      eprint={2511.08083},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG},
+      url={https://arxiv.org/abs/2511.08083}, 
 }
 ```
