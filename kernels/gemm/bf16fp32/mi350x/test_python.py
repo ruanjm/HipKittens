@@ -11,7 +11,7 @@ random.seed(0)
 
 # Inputs
 N = 8192
-scale = 1.0
+scale = 10.0
 A = torch.randn(N, N, dtype=torch.bfloat16, device='cuda')  / scale
 B = torch.randn(N, N, dtype=torch.bfloat16, device='cuda')  / scale
 Bt = B.t().contiguous()  # Transpose B for the kernel
