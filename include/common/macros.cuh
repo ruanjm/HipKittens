@@ -943,8 +943,9 @@ __device__ __forceinline__ void v_cndmask_b32_e64(uint64_t mask) {
     : 
     : "n"(GPR0), "n"(GPR1), "n"(GPR2), "s"(mask));
 }
+
 /**
- * @brief Multiplication operation on explicit registers.
+ * @brief Multiplication operation on explicit registers and immediate operand.
  */
 struct mul {
   template<int GPR0, int GPR1> 
@@ -969,7 +970,51 @@ struct mul {
       static_assert(false, "Invalid operand for instruction: v_mul_f32_e32");
     }
   }
-}; 
+};
+
+/**
+ * @brief Multiplication operation on explicit registers and unpinned registers.
+ */
+ struct mul_vgpr {
+  template<int GPR0, int GPR1> 
+  static __device__ inline void op(const float &param) {
+    if constexpr (GPR0 < 256 && GPR1 < 256) {
+      asm volatile("v_mul_f32_e32 v[%0], %2, v[%1]"
+        : 
+        : "n"(GPR0), "n"(GPR1), "v"(param));
+    } else {
+      static_assert(false, "Invalid operand for instruction: v_mul_f32_e32");
+    }
+  }
+
+  template<int GPR0, int GPR1> 
+  static __device__ inline void op_pk2(const float &param) {
+    if constexpr (GPR0 < (256 - 1) && GPR1 < (256 - 1)) {
+      const float2 param2 = {param, param};
+      asm volatile("v_pk_mul_f32 v[%0:%1], %4, v[%2:%3]"
+        : 
+        : "n"(GPR0), "n"(GPR0 + 1), "n"(GPR1), "n"(GPR1 + 1), "v"(param2));
+    } else {
+      static_assert(false, "Invalid operand for instruction: v_pk_mul_f32");
+    }
+  }
+};
+
+ /**
+ * @brief Multiplication operation on explicit registers and scalar register.
+ */
+ struct mul_sgpr {
+  template<int GPR0, int GPR1> 
+  static __device__ inline void op(const float &param) {
+    if constexpr (GPR0 < 256 && GPR1 < 256) {
+      asm volatile("v_mul_f32_e32 v[%0], %2, v[%1]"
+        : 
+        : "n"(GPR0), "n"(GPR1), "s"(param));
+    } else {
+      static_assert(false, "Invalid operand for instruction: v_mul_f32_e32");
+    }
+  }
+};
 
 struct exp2 {
   template<int GPR0, int GPR1> 
