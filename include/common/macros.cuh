@@ -906,14 +906,6 @@ __device__ __forceinline__ void v_accvgpr_read_b32() {
 }
 
 template<int GPR, typename T>
-__device__ __forceinline__ void v_mov_b32_p2up(const T value) {
-  static_assert(sizeof(T) == sizeof(uint32_t));
-  asm volatile("v_mov_b32 v[%0], %1"
-    : 
-    : "i"(GPR), "v"(value));
-}
-
-template<int GPR, typename T>
 __device__ __forceinline__ void v_mov_b32_up2p(const T value) {
   static_assert(sizeof(T) == sizeof(uint32_t));
   asm volatile("v_mov_b32 v[%0], %1"
@@ -922,7 +914,7 @@ __device__ __forceinline__ void v_mov_b32_up2p(const T value) {
 }
 
 template <int GPR, typename T = uint32_t>
-__device__ __forceinline__ T v_get_gpr() {
+__device__ __forceinline__ T v_mov_b32_p2up() {
   static_assert(sizeof(T) == sizeof(uint32_t));
   T r;
   if constexpr (GPR < 256) {
