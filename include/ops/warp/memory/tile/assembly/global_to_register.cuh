@@ -56,7 +56,7 @@
          constexpr int offset_in_bytes = (elem_offset + col) * sizeof(U);
          constexpr int start_gpr = tile_range::lo + register_offset;
 
-         if constexpr ((offset_in_bytes + k_row_offset) <= macros::max_inst_offset_buf()) {
+         if constexpr ((offset_in_bytes + k_row_offset) <= macros::max_mubuf_inst_offset()) {
             if constexpr (stride_in_bytes == (sizeof(int32_t) * 4)) {
                 macros::buffer_load_dwordx4<start_gpr>(br, thr_offset, 0, offset_in_bytes + k_row_offset);
             }
@@ -70,7 +70,7 @@
                 static_assert(false, "Encounter unsupported format in ops/warp/memory/tile/assembly/global_to_register.cuh\n");
             }
          }
-         else if constexpr (offset_in_bytes <= macros::max_inst_offset_buf()) {
+         else if constexpr (offset_in_bytes <= macros::max_mubuf_inst_offset()) {
             if constexpr (stride_in_bytes == (sizeof(int32_t) * 4)) {
                 macros::buffer_load_dwordx4<start_gpr>(br, thr_offset + k_row_offset, 0, offset_in_bytes);
             }
@@ -84,7 +84,7 @@
                 static_assert(false, "Encounter unsupported format in ops/warp/memory/tile/assembly/global_to_register.cuh\n");
             }
          }
-         else if constexpr (k_row_offset <= macros::max_inst_offset_buf()) {
+         else if constexpr (k_row_offset <= macros::max_mubuf_inst_offset()) {
             if constexpr (stride_in_bytes == (sizeof(int32_t) * 4)) {
                 macros::buffer_load_dwordx4<start_gpr>(br, thr_offset + offset_in_bytes, 0, k_row_offset);
             }

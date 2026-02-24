@@ -158,7 +158,7 @@ __device__ __forceinline__ void clobber_gpr() {
 #undef CLOBBER_AREG_CASE
 #undef CLOBBER_VREG_CASE
 
-__device__ __forceinline__ constexpr uint32_t max_inst_offset_ds()
+__device__ __forceinline__ constexpr uint32_t max_ds_inst_offset()
 {
   // DS ops contain 2 8-bits instruction offset.
   // For non-pk2 instructions like ds_read_b32, the 2 fields are regarded as 1.
@@ -166,7 +166,7 @@ __device__ __forceinline__ constexpr uint32_t max_inst_offset_ds()
   return (1u << 16) - 1;
 }
 
-__device__ __forceinline__ constexpr uint32_t max_inst_offset_ds_pk2()
+__device__ __forceinline__ constexpr uint32_t max_ds_pk2_inst_offset()
 {
   // DS ops contain 2 8-bits instruction offset.
   // For non-pk2 instructions like ds_read_b32, the 2 fields are regarded as a whole.
@@ -174,7 +174,7 @@ __device__ __forceinline__ constexpr uint32_t max_inst_offset_ds_pk2()
   return (1u << 8) - 1;
 }
 
-__device__ __forceinline__ constexpr uint32_t max_inst_offset_buf()
+__device__ __forceinline__ constexpr uint32_t max_mubuf_inst_offset()
 {
   // MUBUF ops contain 1 12-bits instruction offset.
   return (1u << 12) - 1;
