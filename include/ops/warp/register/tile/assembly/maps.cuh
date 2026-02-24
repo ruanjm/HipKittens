@@ -134,27 +134,6 @@ __device__ static inline void bin_map(T0 &dst, const T1 &src, const typename bas
 
     [&]<std::size_t... Rs>(std::index_sequence<Rs...>) {
         ([&]<std::size_t R>() {
-            op::template op<ducks::art::get_nth_range_t<registers_T0, R>::lo, ducks::art::get_nth_range_t<registers_T1, R>::lo>(param);
-        }.template operator()<Rs>(), ...);
-    }(std::make_index_sequence<registers_T0::size>{});
-}
-
-template<int N, int M, typename op, ducks::art::all T0, ducks::art::all T1>
-__device__ static inline void bin_map_pk2(T0 &dst, const T1 &src, const typename base_types::packing<typename T0::dtype>::unpacked_type &param) {
-    static_assert(T0::width == T1::width);
-    static_assert(T0::height == T1::height);
-    static_assert(std::is_same_v<typename T0::dtype, typename T1::dtype>);
-
-    using range_type_T0 = ducks::art::get_nth_range_t<typename T0::register_ranges, N * T0::width + M>;
-    using registers_T0 = ducks::art::split_many_t<ducks::art::type_list<range_type_T0>, 1>;
-
-    using range_type_T1 = ducks::art::get_nth_range_t<typename T1::register_ranges, N * T1::width + M>;
-    using registers_T1 = ducks::art::split_many_t<ducks::art::type_list<range_type_T1>, 1>;
-
-    static_assert(registers_T0::size == registers_T1::size);
-
-    [&]<std::size_t... Rs>(std::index_sequence<Rs...>) {
-        ([&]<std::size_t R>() {
             constexpr int GPR0 = ducks::art::get_nth_range_t<registers_T0, R>::lo;
             constexpr int GPR1 = ducks::art::get_nth_range_t<registers_T1, R>::lo;
             if constexpr ((R % 2) == 0) {
@@ -172,40 +151,6 @@ __device__ static inline void bin_map_pk2(T0 &dst, const T1 &src, const typename
 
 template<typename op, ducks::art::all T0, ducks::art::all T1>
 __device__ static inline void bin_map(T0 &dst, const T1 &src, const typename base_types::packing<typename T0::dtype>::unpacked_type &param) {
-    static_assert(T0::width == T1::width);
-    static_assert(T0::height == T1::height);
-    static_assert(std::is_same_v<typename T0::dtype, typename T1::dtype>);
-
-    auto perform_bin_map_at = [&]<int N, int M>() {
-        using range_type_T0 = ducks::art::get_nth_range_t<typename T0::register_ranges, N * T0::width + M>;
-        using registers_T0 = ducks::art::split_many_t<ducks::art::type_list<range_type_T0>, 1>;
-
-        using range_type_T1 = ducks::art::get_nth_range_t<typename T1::register_ranges, N * T1::width + M>;
-        using registers_T1 = ducks::art::split_many_t<ducks::art::type_list<range_type_T1>, 1>;
-
-        static_assert(registers_T0::size == registers_T1::size);
-
-        [&]<std::size_t... Rs>(std::index_sequence<Rs...>) {
-            ([&]<std::size_t R>() {
-              op::template op<ducks::art::get_nth_range_t<registers_T0, R>::lo, ducks::art::get_nth_range_t<registers_T1, R>::lo>(param);
-            }.template operator()<Rs>(), ...);
-        }(std::make_index_sequence<registers_T0::size>{});
-    };
-
-    // Compile-time nested loops over N and M
-    [&]<std::size_t... Ns>(std::index_sequence<Ns...>) {
-        ([&]<std::size_t N>() {
-            [&]<std::size_t... Ms>(std::index_sequence<Ms...>) {
-                ([&]<std::size_t M>() {
-                    perform_bin_map_at.template operator()<N, M>();
-                }.template operator()<Ms>(), ...);
-            }(std::make_index_sequence<T0::width>{});
-        }.template operator()<Ns>(), ...);
-    }(std::make_index_sequence<T0::height>{});
-}
-
-template<typename op, ducks::art::all T0, ducks::art::all T1>
-__device__ static inline void bin_map_pk2(T0 &dst, const T1 &src, const typename base_types::packing<typename T0::dtype>::unpacked_type &param) {
     static_assert(T0::width == T1::width);
     static_assert(T0::height == T1::height);
     static_assert(std::is_same_v<typename T0::dtype, typename T1::dtype>);
@@ -280,7 +225,18 @@ __device__ static inline void bin_map(T0 &dst, const T1 &lhs, const T2 &rhs) {
 
     [&]<std::size_t... Rs>(std::index_sequence<Rs...>) {
         ([&]<std::size_t R>() {
-        op::template op<ducks::art::get_nth_range_t<registers_T0, R>::lo, ducks::art::get_nth_range_t<registers_T1, R>::lo, ducks::art::get_nth_range_t<registers_T2, R>::lo>();
+            constexpr int GPR0 = ducks::art::get_nth_range_t<registers_T0, R>::lo;
+            constexpr int GPR1 = ducks::art::get_nth_range_t<registers_T1, R>::lo;
+            constexpr int GPR2 = ducks::art::get_nth_range_t<registers_T2, R>::lo;
+            if constexpr ((R % 2) == 0) {
+                if constexpr ((R + 1) < registers_T0::size) {
+                    op::template op_pk2<GPR0, GPR1, GPR2>();
+                }
+                else {
+                    op::template op<GPR0, GPR1, GPR2>();
+                }
+            }
+            // Odd indices are skipped because they're processed by op_pk2 in the previous even iteration
         }.template operator()<Rs>(), ...);
     }(std::make_index_sequence<registers_T0::size>{});
 }
@@ -309,7 +265,18 @@ __device__ static inline void bin_map(T0 &dst, const T1 &lhs, const T2 &rhs) {
 
         [&]<std::size_t... Rs>(std::index_sequence<Rs...>) {
             ([&]<std::size_t R>() {
-              op::template op<ducks::art::get_nth_range_t<registers_T0, R>::lo, ducks::art::get_nth_range_t<registers_T1, R>::lo, ducks::art::get_nth_range_t<registers_T2, R>::lo>();
+                constexpr int GPR0 = ducks::art::get_nth_range_t<registers_T0, R>::lo;
+                constexpr int GPR1 = ducks::art::get_nth_range_t<registers_T1, R>::lo;
+                constexpr int GPR2 = ducks::art::get_nth_range_t<registers_T2, R>::lo;
+                if constexpr ((R % 2) == 0) {
+                    if constexpr ((R + 1) < registers_T0::size) {
+                        op::template op_pk2<GPR0, GPR1, GPR2>();
+                    }
+                    else {
+                        op::template op<GPR0, GPR1, GPR2>();
+                    }
+                }
+                // Odd indices are skipped because they're processed by op_pk2 in the previous even iteration
             }.template operator()<Rs>(), ...);
         }(std::make_index_sequence<registers_T0::size>{});
     };
@@ -437,6 +404,16 @@ __device__ static inline void mul(T0 &dst, const T1 &lhs, const U &rhs) {
 template<ducks::art::all T0, ducks::art::all T1, typename U>
 __device__ static inline void mul(T0 &dst, const T1 &lhs, const U &rhs) {
     bin_map<macros::mul, T0, T1>(dst, lhs, rhs);
+}
+
+template<ducks::art::all T0, ducks::art::all T1, typename U>
+__device__ static inline void mul_vgpr(T0 &dst, const T1 &lhs, const U &rhs) {
+    bin_map<macros::mul_vgpr, T0, T1>(dst, lhs, rhs);
+}
+
+template<int N, int M, ducks::art::all T0, ducks::art::all T1, typename U>
+__device__ static inline void mul_vgpr(T0 &dst, const T1 &lhs, const U &rhs) {
+    bin_map<N, M, macros::mul_vgpr, T0, T1>(dst, lhs, rhs);
 }
 
 /**
